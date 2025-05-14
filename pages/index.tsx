@@ -6,9 +6,12 @@ import Score from '../components/Score';
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const [emotionScore, setEmotionScore] = useState<number>(0);
   const [isModelLoaded, setIsModelLoaded] = useState<boolean>(false);
   const [isCameraReady, setIsCameraReady] = useState<boolean>(false);
+  const [showFaceBox, setShowFaceBox] = useState<boolean>(true);
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
 
   // 모델 로드 함수
   const loadModels = async () => {
@@ -25,14 +28,36 @@ export default function Home() {
     }
   };
 
+  // 화면 크기 조정 함수
+  const updateDimensions = () => {
+    if (containerRef.current) {
+      const { clientWidth, clientHeight } = containerRef.current;
+      setDimensions({
+        width: clientWidth,
+        height: clientHeight
+      });
+    } else {
+      setDimensions({
+        width: window.innerWidth,
+        height: window.innerHeight
+      });
+    }
+  };
+
   // 웹캠 시작 함수
   const startVideo = async () => {
     if (!videoRef.current) return;
     
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user' },
-      });
+      const constraints = {
+        video: {
+          facingMode: 'user',
+          width: { ideal: dimensions.height * (4/3) }, // 4:3 비율 유지
+          height: { ideal: dimensions.height }
+        }
+      };
+      
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
       videoRef.current.srcObject = stream;
       videoRef.current.onloadedmetadata = () => {
@@ -48,10 +73,18 @@ export default function Home() {
   const detectExpressions = async () => {
     if (!videoRef.current || !canvasRef.current || !isModelLoaded || !isCameraReady) return;
     
-    // 캔버스 크기를 비디오 크기에 맞게 설정
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const displaySize = { width: video.width, height: video.height };
+    const ctx = canvas.getContext('2d');
+    
+    // 캔버스 크기 설정
+    canvas.width = dimensions.width;
+    canvas.height = dimensions.height;
+    
+    // 캔버스 초기화
+    ctx?.clearRect(0, 0, canvas.width, canvas.height);
+
+    const displaySize = { width: dimensions.width, height: dimensions.height };
     faceapi.matchDimensions(canvas, displaySize);
     
     // 표정 감지 실행
@@ -61,28 +94,30 @@ export default function Home() {
     
     if (detections.length > 0) {
       const expressions = detections[0].expressions;
-      
-      // 감정 점수 계산: 행복 - (슬픔 + 화남 + 역겨움)
       const happyScore = expressions.happy;
       const negativeScore = expressions.sad + expressions.angry + expressions.disgusted;
-      const score = happyScore - negativeScore;
-      
-      setEmotionScore(score);
-      
-      // 감지된 얼굴과 표정을 캔버스에 그림
-      const resizedDetections = faceapi.resizeResults(detections, displaySize);
-      canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
-      faceapi.draw.drawDetections(canvas, resizedDetections);
-      faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
+      const rawScore = happyScore - negativeScore;
+      const percentageScore = Math.max(Math.min(rawScore * 100, 100), -100);
+      setEmotionScore(percentageScore);
+
+      // showFaceBox가 true이고 캔버스가 보이는 상태일 때만 그리기
+      if (showFaceBox && canvas.style.display !== 'none') {
+        const resizedDetections = faceapi.resizeResults(detections, displaySize);
+        faceapi.draw.drawDetections(canvas, resizedDetections);
+        faceapi.draw.drawFaceExpressions(canvas, resizedDetections);
+      }
     }
   };
 
-  // 컴포넌트 마운트 시 모델 로드 및 웹캠 시작
+  // 컴포넌트 마운트 시 화면 크기 설정, 모델 로드 및 웹캠 시작
   useEffect(() => {
+    updateDimensions();
+    window.addEventListener('resize', updateDimensions);
+    
     loadModels();
-    startVideo();
     
     return () => {
+      window.removeEventListener('resize', updateDimensions);
       // 컴포넌트 언마운트 시 비디오 스트림 정리
       if (videoRef.current && videoRef.current.srcObject) {
         const stream = videoRef.current.srcObject as MediaStream;
@@ -91,6 +126,11 @@ export default function Home() {
       }
     };
   }, []);
+
+  // 카메라 준비되면 시작
+  useEffect(() => {
+    startVideo();
+  }, [dimensions]);
 
   // 표정 감지 인터벌 설정 (0.2초마다)
   useEffect(() => {
@@ -102,43 +142,58 @@ export default function Home() {
   }, [isModelLoaded, isCameraReady]);
 
   return (
-    <div className="flex min-h-screen flex-col items-center py-8 bg-gray-100">
+    <div className="w-screen h-screen overflow-hidden" ref={containerRef}>
       <Head>
         <title>스마일 미러</title>
         <meta name="description" content="실시간 표정 분석 앱" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
 
-      <main className="flex flex-col items-center w-full max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold mb-8">스마일 미러</h1>
-        
-        <div className="relative mb-6">
+      <button
+        onClick={() => setShowFaceBox(!showFaceBox)}
+        className="fixed top-0 left-0 m-4 px-4 py-2 bg-gray-800 hover:bg-gray-700 text-white rounded-lg shadow-lg z-50 transition-colors"
+      >
+        얼굴 감지 {showFaceBox ? '끄기' : '켜기'}
+      </button>
+
+      <Score score={emotionScore} />
+
+      <main className="relative w-full h-full bg-black flex justify-center items-center">
+        <div className="relative h-full flex items-center justify-center overflow-hidden">
           <video
             ref={videoRef}
             autoPlay
+            playsInline
             muted
-            width="640"
-            height="480"
-            className="rounded-lg shadow-lg"
+            style={{
+              height: '100%',
+              width: 'auto',
+              objectFit: 'contain',
+              display: 'block',
+              transform: 'scaleX(-1)'
+            }}
           />
           <canvas
             ref={canvasRef}
-            width="640"
-            height="480"
-            className="absolute top-0 left-0"
+            style={{
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              pointerEvents: 'none',
+              display: showFaceBox ? 'block' : 'none',
+              transform: 'scaleX(-1)'
+            }}
           />
         </div>
         
-        <div className="w-full max-w-md">
-          <Score score={emotionScore} />
-        </div>
-        
         {!isModelLoaded && (
-          <p className="mt-4 text-yellow-600">모델을 로드하는 중입니다...</p>
+          <p className="absolute top-4 left-0 right-0 text-center text-yellow-600 bg-black bg-opacity-50 py-2">모델을 로드하는 중입니다...</p>
         )}
         
         {!isCameraReady && isModelLoaded && (
-          <p className="mt-4 text-yellow-600">카메라를 시작하는 중입니다...</p>
+          <p className="absolute top-4 left-0 right-0 text-center text-yellow-600 bg-black bg-opacity-50 py-2">카메라를 시작하는 중입니다...</p>
         )}
       </main>
     </div>
