@@ -2,13 +2,11 @@
 
 import React, { useEffect, useRef } from 'react';
 import * as faceLandmarksDetection from '@tensorflow-models/face-landmarks-detection';
-import { applyEyeEnhancement } from '../lib/warpUtils';
 
 interface SmileCanvasProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
-  smileStrength: number;
+  smileStrength: number; // -1.0 ~ 1.0 범위 (-100% ~ +100%)
   landmarks: faceLandmarksDetection.Keypoint[] | null;
-  showDebug?: boolean;
   className?: string;
 }
 
@@ -16,23 +14,23 @@ const SmileCanvas: React.FC<SmileCanvasProps> = ({
   videoRef,
   smileStrength,
   landmarks,
-  showDebug = false,
   className
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const debugCanvasRef = useRef<HTMLCanvasElement>(null);
+  const effectCanvasRef = useRef<HTMLCanvasElement>(null);
   const animationRef = useRef<number | undefined>(undefined);
 
   // 캔버스 렌더링 로직
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    const debugCanvas = debugCanvasRef.current;
+    const effectCanvas = effectCanvasRef.current;
     
-    if (!video || !canvas) return;
+    if (!video || !canvas || !effectCanvas) return;
     
     const ctx = canvas.getContext('2d');
-    if (!ctx) return;
+    const effectCtx = effectCanvas.getContext('2d');
+    if (!ctx || !effectCtx) return;
     
     // 캔버스 크기 설정
     const setCanvasSize = () => {
@@ -40,10 +38,8 @@ const SmileCanvas: React.FC<SmileCanvasProps> = ({
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
         
-        if (debugCanvas) {
-          debugCanvas.width = canvas.width;
-          debugCanvas.height = canvas.height;
-        }
+        effectCanvas.width = canvas.width;
+        effectCanvas.height = canvas.height;
       }
     };
     
@@ -51,13 +47,9 @@ const SmileCanvas: React.FC<SmileCanvasProps> = ({
     if (video.readyState >= 2) {
       setCanvasSize();
     } else {
-      // 비디오가 준비되지 않았다면 이벤트 리스너 추가
-      const handleVideoReady = () => {
-        setCanvasSize();
-      };
+      const handleVideoReady = () => setCanvasSize();
       video.addEventListener('loadeddata', handleVideoReady);
       
-      // 클린업 시 이벤트 리스너 제거
       return () => {
         video.removeEventListener('loadeddata', handleVideoReady);
         if (animationRef.current) {
@@ -66,96 +58,121 @@ const SmileCanvas: React.FC<SmileCanvasProps> = ({
       };
     }
     
-    let lastRender = 0;
-    const renderInterval = 1000 / 30; // 30fps
-    
-    // 보정 효과 렌더링 함수
-    const renderEffect = (timestamp: number) => {
-      if (!video || !canvas || !ctx) {
-        animationRef.current = requestAnimationFrame(renderEffect);
-        return;
-      }
+    // 미소 효과 적용 함수
+    const applySmileEffect = (strength: number) => {
+      effectCtx.clearRect(0, 0, effectCanvas.width, effectCanvas.height);
       
-      if (timestamp - lastRender >= renderInterval) {
-        lastRender = timestamp;
-        
-        try {
-          // 캔버스 초기화
-          ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-          // 기본 비디오 렌더링 (랜드마크가 없을 경우)
-          if (!landmarks || landmarks.length === 0) {
-            // 랜드마크가 없으면 아무것도 하지 않음 (캔버스는 이미 위에서 클리어됨)
-          } else {
-            // 눈 확대 효과 적용
-            applyEyeEnhancement(
-              ctx,
-              canvas.width,
-              canvas.height,
-              video,
-              landmarks,
-              smileStrength,
-              true // 좌우반전 적용
-            );
-          }
-          
-          // 디버그 캔버스에 정보 표시
-          if (showDebug && debugCanvas) {
-            const debugCtx = debugCanvas.getContext('2d');
-            if (debugCtx) {
-              // 디버그 캔버스 초기화
-              debugCtx.clearRect(0, 0, debugCanvas.width, debugCanvas.height);
-              
-              // 디버그 정보 표시 상자 (오른쪽 상단에 위치)
-              const margin = 20;
-              const boxWidth = 200;
-              const boxHeight = 100;
-              const boxX = debugCanvas.width - boxWidth - margin;
-              const boxY = margin;
-              
-              // 반투명 배경 상자
-              debugCtx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-              debugCtx.fillRect(boxX, boxY, boxWidth, boxHeight);
-              
-              // 테두리 및 상단 강조
-              debugCtx.fillStyle = 'rgba(32, 156, 238, 0.8)';
-              debugCtx.fillRect(boxX, boxY, boxWidth, 4);
-              
-              // 텍스트 정보
-              debugCtx.font = 'bold 16px Arial';
-              debugCtx.fillStyle = 'white';
-              debugCtx.textAlign = 'left';
-              debugCtx.fillText('디버그 정보', boxX + 10, boxY + 25);
-              
-              // 데이터 값
-              debugCtx.font = '14px Arial';
-              debugCtx.fillStyle = 'rgba(255, 255, 255, 0.9)';
-              debugCtx.fillText(`웃음 강도: ${(smileStrength * 100).toFixed(1)}%`, boxX + 10, boxY + 50);
-              debugCtx.fillText(`눈 확대 비율: ${(1 + smileStrength * 0.3).toFixed(2)}x`, boxX + 10, boxY + 75);
-              
-              // 감지된 랜드마크 표시 (선택 사항)
-              if (landmarks && landmarks.length > 0) {
-                debugCtx.fillStyle = 'rgba(0, 255, 0, 0.3)';
-                landmarks.forEach(point => {
-                  // 비디오 좌우반전 고려
-                  const x = debugCanvas.width - point.x; // 좌우반전 적용
-                  debugCtx.beginPath();
-                  debugCtx.arc(x, point.y, 2, 0, Math.PI * 2);
-                  debugCtx.fill();
-                });
-              }
-            }
-          }
-        } catch (error) {
-          console.error('렌더링 오류:', error);
+      if (!landmarks || landmarks.length === 0) return;
+      
+      // 절대 강도 계산 (0 ~ 1 범위)
+      const absStrength = Math.abs(strength);
+      
+      // 얼굴 윤곽선 그리기
+      effectCtx.strokeStyle = `rgba(255, 255, 255, ${absStrength * 0.3})`;
+      effectCtx.lineWidth = 2;
+      
+      // 감정 상태에 따른 효과 색상 설정
+      let glowColor = 'rgba(255, 255, 255, 0.3)'; // 기본 흰색
+      
+      if (strength > 0) { // 긍정적 감정 (웃음)
+        if (strength > 0.7) {
+          glowColor = 'rgba(255, 215, 0, 0.6)'; // 황금색 (매우 기쁨)
+        } else if (strength > 0.4) {
+          glowColor = 'rgba(0, 191, 255, 0.5)'; // 하늘색 (약간 기쁨)
+        }
+      } else if (strength < 0) { // 부정적 감정 (화남/슬픔)
+        if (strength < -0.7) {
+          glowColor = 'rgba(255, 0, 0, 0.6)'; // 빨간색 (매우 화남)
+        } else if (strength < -0.4) {
+          glowColor = 'rgba(255, 69, 0, 0.5)'; // 주황색 (약간 화남)
         }
       }
       
-      animationRef.current = requestAnimationFrame(renderEffect);
+      effectCtx.shadowColor = glowColor;
+      effectCtx.shadowBlur = 15 * absStrength;
+      
+      // 입 주변 하이라이트
+      if (landmarks) {
+        try {
+          // 입 주변 랜드마크 추출
+          const mouthPoints = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291].map(idx => 
+            landmarks[idx] ? landmarks[idx] : null
+          ).filter(point => point !== null) as faceLandmarksDetection.Keypoint[];
+          
+          if (mouthPoints.length > 0) {
+            // 입 주변 영역 하이라이트
+            effectCtx.beginPath();
+            effectCtx.moveTo(mouthPoints[0].x, mouthPoints[0].y);
+            
+            for (let i = 1; i < mouthPoints.length; i++) {
+              effectCtx.lineTo(mouthPoints[i].x, mouthPoints[i].y);
+            }
+            
+            effectCtx.closePath();
+            effectCtx.fillStyle = `rgba(255, 255, 255, ${absStrength * 0.1})`;
+            effectCtx.fill();
+            effectCtx.stroke();
+          }
+        } catch (error) {
+          console.error("랜드마크 처리 오류:", error);
+        }
+      }
+      
+      // 감정 점수 표시
+      // 음수/양수에 따라 다른 접두사 사용
+      const prefix = strength > 0 ? '+' : '';
+      const scoreText = `${prefix}${Math.round(strength * 100)}%`;
+      const fontSize = 24 + (absStrength * 12);
+      
+      effectCtx.font = `bold ${fontSize}px Arial`;
+      effectCtx.textAlign = 'center';
+      effectCtx.textBaseline = 'top';
+      
+      // 그림자 효과로 텍스트 테두리
+      effectCtx.fillStyle = glowColor;
+      effectCtx.shadowColor = 'rgba(0, 0, 0, 0.7)';
+      effectCtx.shadowBlur = 5;
+      effectCtx.shadowOffsetX = 2;
+      effectCtx.shadowOffsetY = 2;
+      
+      // 감정에 따른 이모지 선택
+      let emoji = '😐'; // 기본 무표정
+      if (strength > 0.7) emoji = '😄'; // 매우 웃음
+      else if (strength > 0.4) emoji = '🙂'; // 약간 웃음
+      else if (strength > 0.1) emoji = '😊'; // 미소
+      else if (strength < -0.7) emoji = '😠'; // 매우 화남
+      else if (strength < -0.4) emoji = '😒'; // 약간 화남
+      else if (strength < -0.1) emoji = '😕'; // 살짝 불만
+      
+      // 테스트용 점수 표시
+      console.log(`캔버스 감정 점수: ${scoreText} (강도: ${strength}, 절대값: ${absStrength})`);
+      
+      // 텍스트와 이모지 표시
+      effectCtx.fillText(`${emoji} ${scoreText}`, effectCanvas.width - 80, 30);
+      
+      // 그림자 초기화
+      effectCtx.shadowColor = 'transparent';
+      effectCtx.shadowBlur = 0;
+      effectCtx.shadowOffsetX = 0;
+      effectCtx.shadowOffsetY = 0;
+    };
+    
+    // 렌더링 함수
+    const renderFrame = () => {
+      if (video && canvas && ctx) {
+        // 캔버스 초기화 및 비디오 그리기
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        
+        // 미소 효과 적용
+        applySmileEffect(smileStrength);
+      }
+      
+      animationRef.current = requestAnimationFrame(renderFrame);
     };
     
     // 렌더링 시작
-    animationRef.current = requestAnimationFrame(renderEffect);
+    animationRef.current = requestAnimationFrame(renderFrame);
     
     // 클린업
     return () => {
@@ -163,7 +180,7 @@ const SmileCanvas: React.FC<SmileCanvasProps> = ({
         cancelAnimationFrame(animationRef.current);
       }
     };
-  }, [videoRef, smileStrength, landmarks, showDebug]);
+  }, [videoRef, smileStrength, landmarks]);
   
   return (
     <>
@@ -171,14 +188,12 @@ const SmileCanvas: React.FC<SmileCanvasProps> = ({
         ref={canvasRef}
         className={`absolute top-0 left-0 w-full h-full object-contain pointer-events-none ${className || ''}`}
       />
-      {showDebug && (
-        <canvas
-          ref={debugCanvasRef}
-          className="absolute top-0 left-0 w-full h-full object-contain pointer-events-none z-30"
-        />
-      )}
+      <canvas
+        ref={effectCanvasRef}
+        className="absolute top-0 left-0 w-full h-full object-contain pointer-events-none z-10"
+      />
     </>
   );
 };
 
-export default SmileCanvas; 
+export default SmileCanvas;
