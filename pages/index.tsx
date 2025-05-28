@@ -49,6 +49,7 @@ export default function Home() {
   const [gateStatus, setGateStatus] = useState<EmotionGateStatus>('analyzing');
   const [deniedMessage, setDeniedMessage] = useState<string>('');
   const [lockTimer, setLockTimer] = useState<number>(0);
+  const lockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // 화면 크기 관리
   const { dimensions, updateDimensions } = useDimensions(containerRef);
@@ -94,12 +95,18 @@ export default function Home() {
   const playDeniedMessage = useCallback((message: string) => {
     setDeniedMessage(message);
     
-    // Web Speech API를 사용한 음성 메시지
+    // Web Speech API를 사용한 음성 메시지 - 즉시 실행
     if ('speechSynthesis' in window) {
+      // 기존 음성 중단
+      window.speechSynthesis.cancel();
+      
       const utterance = new SpeechSynthesisUtterance(message);
       utterance.lang = 'ko-KR';
-      utterance.rate = 0.8;
-      utterance.pitch = 0.7;
+      utterance.rate = 1.2; // 더 빠른 속도로 긴박감 증가
+      utterance.pitch = 0.8; // 약간 낮은 톤으로 경고음 느낌
+      utterance.volume = 1.0; // 최대 볼륨
+      
+      // 즉시 재생
       window.speechSynthesis.speak(utterance);
     }
   }, []);
@@ -115,21 +122,48 @@ export default function Home() {
         playDeniedMessage('감정이 불안정하신 것 같아요. 진입은 잠시 보류됩니다.');
         
         // 3초 후 락 상태로 전환
-        setTimeout(() => {
+        lockTimeoutRef.current = setTimeout(() => {
+          // 2단계 더 극한 경고 메시지 먼저 재생
+          playDeniedMessage('시스템 오류가 발생했습니다. 감정 불안정이 감지되어 출입이 일시적으로 제한됩니다.');
+          
+          // 음성과 동시에 락 상태와 타이머 설정 (동시 업데이트)
           setGateStatus('locked');
           setLockTimer(5); // 5초 카운트다운
         }, 3000);
       }
     } else if (score >= POSITIVE_THRESHOLD) {
       if (gateStatus !== 'approved') {
+        // 감정이 개선되면 즉시 음성 중단 (denied/locked 상태에서)
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+        }
+        
+        // 진행 중인 락 타이머 취소
+        if (lockTimeoutRef.current) {
+          clearTimeout(lockTimeoutRef.current);
+          lockTimeoutRef.current = null;
+        }
+        
         setGateStatus('approved');
         setDeniedMessage('');
         setLockTimer(0);
       }
     } else {
-      if (gateStatus === 'approved' || gateStatus === 'denied') {
+      if (gateStatus === 'approved' || gateStatus === 'denied' || gateStatus === 'locked') {
+        // 중립 상태로 변경 시에도 음성 중단
+        if ('speechSynthesis' in window) {
+          window.speechSynthesis.cancel();
+        }
+        
+        // 진행 중인 락 타이머 취소
+        if (lockTimeoutRef.current) {
+          clearTimeout(lockTimeoutRef.current);
+          lockTimeoutRef.current = null;
+        }
+        
         setGateStatus('analyzing');
         setDeniedMessage('');
+        setLockTimer(0);
       }
     }
   }, [gateStatus, playDeniedMessage]);
@@ -139,6 +173,17 @@ export default function Home() {
     stopDetectionInterval();
     cleanupVideo();
     cleanupDeepAR();
+    
+    // 음성 중단
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    
+    // 락 타이머 정리
+    if (lockTimeoutRef.current) {
+      clearTimeout(lockTimeoutRef.current);
+      lockTimeoutRef.current = null;
+    }
   }, [stopDetectionInterval, cleanupVideo, cleanupDeepAR]);
 
   // Effects
@@ -335,14 +380,12 @@ export default function Home() {
       {/* 상태 오버레이 */}
       <div className={`absolute inset-0 z-5 ${gateStyles.overlay} pointer-events-none transition-all duration-500`} />
 
-      {/* AR 효과 버튼 */}
+      {/* AR 효과 상태 표시 */}
       <div className="fixed top-4 right-4 z-50">
-      <AREffectButtons
-        isDeepARLoaded={isDeepARLoaded}
-        activeEffect={activeEffect}
-        onApplyEffect={applyEffect}
-          onSetBackground={setDeepARBackground}
-      />
+        <AREffectButtons
+          isDeepARLoaded={isDeepARLoaded}
+          activeEffect={activeEffect}
+        />
       </div>
 
       <main className="relative w-full h-full bg-black">
@@ -353,11 +396,13 @@ export default function Home() {
           muted
           style={{
             position: 'absolute',
-            top: '0',
-            left: '0',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
             width: '100vw',
             height: '100vh',
             objectFit: 'cover',
+            objectPosition: 'center top',
             opacity: videoOpacity,
             zIndex: '0',
             filter: gateStyles.filter,
@@ -386,12 +431,14 @@ export default function Home() {
         {/* 점수 표시 */}
         <Score score={emotionScore} />
         
-        {/* 거부 메시지 표시 */}
+        {/* 거부 메시지 표시 - 화면 하단 중앙 정렬 */}
         {deniedMessage && (
-          <div className="fixed bottom-24 left-1/2 transform -translate-x-1/2 z-40 bg-red-600 text-white px-8 py-4 rounded-lg text-center max-w-md animate-bounce shadow-2xl border-2 border-red-400">
-            <div className="flex items-center justify-center space-x-2">
-              <span className="text-2xl">🚫</span>
-              <p className="text-lg font-semibold">{deniedMessage}</p>
+          <div className="fixed bottom-0 left-0 right-0 z-40 flex justify-center pb-20 pointer-events-none">
+            <div className="bg-yellow-600 text-white px-8 py-4 rounded-lg text-center max-w-md animate-bounce shadow-2xl border-2 border-yellow-400 pointer-events-auto">
+              <div className="flex items-center justify-center space-x-2">
+                <span className="text-2xl">🚫</span>
+                <p className="text-lg font-semibold">{deniedMessage}</p>
+              </div>
             </div>
           </div>
         )}

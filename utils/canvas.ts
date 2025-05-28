@@ -51,13 +51,15 @@ export const setupCanvas = (
   canvas.width = canvasWidth;
   canvas.height = canvasHeight;
   
-  // 두 캔버스 모두 동일한 전체화면 설정
+  // 가운데 정렬을 위한 설정
   canvas.style.position = 'absolute';
-  canvas.style.top = '0';
-  canvas.style.left = '0';
+  canvas.style.top = '50%';
+  canvas.style.left = '50%';
+  canvas.style.transform = 'translate(-50%, -50%)';
   canvas.style.width = '100vw';
   canvas.style.height = '100vh';
   canvas.style.objectFit = 'cover';
+  canvas.style.objectPosition = 'center center';
   canvas.style.pointerEvents = 'none';
   
   if (isDeepAR) {

@@ -147,9 +147,10 @@ const EmotionGateOverlay: React.FC<EmotionGateOverlayProps> = ({
       {gateStatus === 'locked' && (
         <div className="absolute inset-0 z-40 flex items-center justify-center pointer-events-none">
           <div className="bg-red-600 bg-opacity-90 text-white px-8 py-4 rounded-lg text-center flicker-animation border-2 border-red-400">
-            <div className="text-3xl mb-2">⚠️ 시스템 오류 ⚠️</div>
-            <div className="text-lg">감정 불안정 감지</div>
-            <div className="text-sm">출입이 일시적으로 제한됩니다</div>
+            <div className="text-3xl mb-2">🔴 최종 경고 🔴</div>
+            <div className="text-lg font-bold">감정 위험 임계치 초과</div>
+            <div className="text-sm">완전 차단 모드 활성화</div>
+            <div className="text-xs mt-1 animate-pulse">CRITICAL LOCKDOWN - ACCESS DENIED</div>
           </div>
         </div>
       )}

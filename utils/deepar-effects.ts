@@ -196,9 +196,8 @@ export const applyBeautyEffect = async (
       // ✅ 긍정적 감정 - 입장 허가 & 아름다운 효과
       console.log('✅ 감정이 안정적입니다. 입장 허가 - 환영 효과 적용');
       
-      // 긍정적 감정에 따른 아름다운 효과들
+      // 긍정적 감정에 따른 아름다운 효과들 (플라워 효과 제거됨)
       const welcomeEffects = [
-        { name: '🌸 플라워 환영', path: '/effects/flowers.deepar', minIntensity: 0.9 },
         { name: '🐨 귀여운 안내', path: '/effects/koala', minIntensity: 0.8 },
         { name: '🌌 우주적 환영', path: '/effects/galaxy_background', minIntensity: 0.7 },
         { name: '🕶️ 멋진 입장', path: '/effects/aviators', minIntensity: 0.6 }
