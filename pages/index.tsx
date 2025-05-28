@@ -120,6 +120,39 @@ export default function Home() {
     updateDeepARCanvasSize();
   }, [updateDeepARCanvasSize]);
 
+  // 스코어에 따른 자동 블러 효과 적용 (거의 실시간)
+  useEffect(() => {
+    if (!isDeepARLoaded || !emotionScore) return;
+    
+    // 스코어 값 검증 (-100~100 범위 확인)
+    if (emotionScore < -100 || emotionScore > 100) {
+      console.warn(`비정상적인 스코어 값: ${emotionScore}, 무시됨`);
+      return;
+    }
+    
+    // 안정적인 디바운싱을 위한 타이머
+    const debounceTimer = setTimeout(() => {
+      if (emotionScore >= 10) { // 10% 이상
+        // 점수에 따른 블러 강도 계산 (10~100 -> 1~10)
+        const normalizedScore = Math.max(0, Math.min(100, emotionScore));
+        const blurIntensity = Math.round((normalizedScore / 100) * 9 + 1);
+        
+        // 현재 블러 효과가 활성화되지 않은 경우에만 로그 출력
+        if (activeEffect !== 'blur') {
+          console.log(`스코어 ${emotionScore.toFixed(1)}% - 블러 효과 적용 (강도: ${blurIntensity})`);
+        }
+        applyEffect('blur', blurIntensity);
+      } else if (emotionScore < 8) { // 8% 미만일 때만 제거 (히스테리시스 적용)
+        if (activeEffect === 'blur') {
+          console.log(`스코어 ${emotionScore.toFixed(1)}% - 블러 효과 자동 제거`);
+          applyEffect(null);
+        }
+      }
+    }, 100); // 100ms 디바운싱으로 안정성 향상
+    
+    return () => clearTimeout(debounceTimer);
+  }, [emotionScore, isDeepARLoaded, activeEffect, applyEffect]);
+
   return (
     <div className="w-screen h-screen overflow-hidden" ref={containerRef}>
       <Head>

@@ -19,6 +19,9 @@ export const useDeepAR = (
   const isInitializingRef = useRef<boolean>(false);
   const [isDeepARLoaded, setIsDeepARLoaded] = useState<boolean>(false);
   const [activeEffect, setActiveEffect] = useState<EffectType>(null);
+  const [currentBlurIntensity, setCurrentBlurIntensity] = useState<number | null>(null);
+  const isApplyingEffectRef = useRef<boolean>(false); // 효과 적용 중 상태 추적
+  const initTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // DeepAR 스크립트 로드
   const loadDeepARScript = useCallback((): Promise<void> => {
@@ -280,46 +283,67 @@ export const useDeepAR = (
   }, [loadDeepARScript, dimensions, isDeepARLoaded, deepARCanvasRef, videoRef]);
 
   // AR 효과 적용
-  const applyEffect = useCallback(async (effectType: EffectType) => {
-    if (!deepARRef.current || !isDeepARLoaded || isInitializingRef.current) {
-      console.log('DeepAR이 준비되지 않거나 초기화 중임');
+  const applyEffect = useCallback(async (effectType: EffectType, blurIntensity?: number) => {
+    if (!deepARRef.current || !isDeepARLoaded || isInitializingRef.current || isApplyingEffectRef.current) {
+      console.log('DeepAR이 준비되지 않거나 이미 효과 적용 중');
       return;
     }
     
-    try {
-      console.log(`효과 적용 시작: ${effectType}`);
-      
-      // 현재 활성 효과와 같으면 건너뜀
-      if (activeEffect === effectType) {
-        console.log('이미 같은 효과가 활성화됨');
+    // 현재 활성 효과와 같으면 건너뜀 (블러의 경우 강도가 다르면 재적용)
+    if (activeEffect === effectType && effectType !== 'blur') {
+      console.log('이미 같은 효과가 활성화됨');
+      return;
+    }
+    
+    // 블러의 경우 현재 강도와 비교
+    if (effectType === 'blur' && activeEffect === 'blur') {
+      const targetIntensity = blurIntensity !== undefined ? Math.max(1, Math.min(10, blurIntensity)) : 3;
+      if (currentBlurIntensity === targetIntensity) {
+        console.log(`이미 같은 강도(${targetIntensity})의 블러가 적용됨`);
         return;
       }
+    }
+    
+    try {
+      isApplyingEffectRef.current = true; // 효과 적용 시작
+      console.log(`효과 적용 시작: ${effectType}${effectType === 'blur' ? `, 강도: ${blurIntensity}` : ''}`);
       
-      // 모든 효과 안전하게 초기화 - 순차적으로 실행하고 각 단계마다 지연 추가
-      console.log('기존 효과 제거 시작');
+      // 블러에서 블러로 전환하는 경우 기존 효과 제거 생략
+      const isBlurToBlur = (activeEffect === 'blur' && effectType === 'blur');
       
-      try {
-        if (deepARRef.current.removeEffect) {
-          await deepARRef.current.removeEffect();
-        } else if (deepARRef.current.clearEffect) {
-          await deepARRef.current.clearEffect();
-        } else {
-          await deepARRef.current.switchEffect(null);
+      if (!isBlurToBlur) {
+        // 모든 효과 안전하게 초기화 - 순차적으로 실행하고 각 단계마다 지연 추가
+        console.log('기존 효과 제거 시작');
+        
+        try {
+          if (deepARRef.current.removeEffect) {
+            await deepARRef.current.removeEffect();
+          } else if (deepARRef.current.clearEffect) {
+            await deepARRef.current.clearEffect();
+          } else {
+            await deepARRef.current.switchEffect(null);
+          }
+          await new Promise(resolve => setTimeout(resolve, 100)); // 지연 추가
+        } catch (e) {
+          console.warn('효과 제거 오류:', e);
         }
-        await new Promise(resolve => setTimeout(resolve, 100)); // 지연 추가
-      } catch (e) {
-        console.warn('효과 제거 오류:', e);
+        
+        try {
+          // 블러 상태 확인 후 비활성화 (블러에서 블러 전환이 아닌 경우에만)
+          if (activeEffect === 'blur') {
+            await deepARRef.current.backgroundBlur(false);
+            setCurrentBlurIntensity(null);
+            await new Promise(resolve => setTimeout(resolve, 50)); // 지연 추가
+          }
+        } catch (e) {
+          console.warn('backgroundBlur 초기화 오류:', e);
+        }
+        
+        // 초기화 완료 후 추가 지연
+        await new Promise(resolve => setTimeout(resolve, 100));
+      } else {
+        console.log('블러에서 블러로 전환: 기존 효과 제거 생략');
       }
-      
-      try {
-        await deepARRef.current.backgroundBlur(false);
-        await new Promise(resolve => setTimeout(resolve, 50)); // 지연 추가
-      } catch (e) {
-        console.warn('backgroundBlur 초기화 오류:', e);
-      }
-      
-      // 초기화 완료 후 추가 지연
-      await new Promise(resolve => setTimeout(resolve, 100));
       
       // DeepAR 상태 다시 확인
       if (!deepARRef.current || !isDeepARLoaded || isInitializingRef.current) {
@@ -330,19 +354,29 @@ export const useDeepAR = (
       // 새 효과 적용
       if (effectType === null) {
         setActiveEffect(null);
+        setCurrentBlurIntensity(null);
         console.log('모든 효과 제거됨');
       } else if (effectType === 'blur') {
         try {
-          console.log('블러 효과 적용 시도');
+          console.log(`블러 효과 적용 시도${isBlurToBlur ? ' (강도 변경)' : ''}`);
           // 블러 적용 전 한 번 더 상태 확인
           if (!deepARRef.current || !isDeepARLoaded) {
             throw new Error('DeepAR 상태가 유효하지 않음');
           }
           
-          // 더 안전한 블러 적용 - 낮은 강도부터 시작
-          await deepARRef.current.backgroundBlur(true, 3); // 강도를 더 낮춤
+          // 블러 강도 계산 (기본값: 3, 범위: 1~10)
+          const intensity = blurIntensity !== undefined ? Math.max(1, Math.min(10, blurIntensity)) : 3;
+          
+          // 블러 적용 (블러에서 블러로 전환하는 경우 더 짧은 지연)
+          await deepARRef.current.backgroundBlur(true, intensity);
           setActiveEffect(effectType);
-          console.log('배경 블러 효과 적용됨');
+          setCurrentBlurIntensity(intensity);
+          
+          if (isBlurToBlur) {
+            console.log(`블러 강도 변경됨: ${currentBlurIntensity} → ${intensity}`);
+          } else {
+            console.log(`배경 블러 효과 적용됨 (강도: ${intensity})`);
+          }
         } catch (blurError) {
           console.error('블러 효과 적용 중 오류:', blurError);
           // 블러 적용 실패 시 효과 비활성화
@@ -355,6 +389,7 @@ export const useDeepAR = (
             console.error('블러 정리 중 오류:', cleanupError);
           }
           setActiveEffect(null);
+          setCurrentBlurIntensity(null);
         }
       }
     } catch (error) {
@@ -373,14 +408,17 @@ export const useDeepAR = (
           }
           await new Promise(resolve => setTimeout(resolve, 50));
           
-          await deepARRef.current.backgroundBlur(false);
-          await new Promise(resolve => setTimeout(resolve, 50));
+          // 오류 상황에서는 블러 비활성화 생략 (이미 오류 상태일 가능성)
+          console.log('오류로 인해 블러 비활성화 생략');
         }
         setActiveEffect(null);
+        setCurrentBlurIntensity(null);
         console.log('오류 후 모든 효과 제거됨');
       } catch (cleanupError) {
         console.error('효과 정리 중 오류:', cleanupError);
       }
+    } finally {
+      isApplyingEffectRef.current = false; // 효과 적용 완료
     }
   }, [isDeepARLoaded, activeEffect, isInitializingRef]);
 
