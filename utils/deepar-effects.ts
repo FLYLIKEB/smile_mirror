@@ -53,27 +53,68 @@ export const removeEffects = async (deepARInstance: any): Promise<void> => {
   
   try {
     const availableFunctions = getAvailableFunctions(deepARInstance);
-    const removeFunctions = ['removeEffect', 'clearEffect', 'switchEffect'];
+    console.log('🧹 효과 제거 시작...');
     
-    for (const funcName of removeFunctions) {
-      if (availableFunctions.includes(funcName)) {
-        try {
-          if (funcName === 'switchEffect') {
-            await deepARInstance[funcName](null);
-          } else {
-            await deepARInstance[funcName]();
-          }
-          console.log(`✅ ${funcName}으로 효과 제거 성공`);
-          return;
-        } catch (removeError) {
-          console.log(`❌ ${funcName} 실패:`, removeError);
-        }
+    // 1순위: clearEffect 시도
+    if (availableFunctions.includes('clearEffect')) {
+      try {
+        await deepARInstance.clearEffect();
+        console.log('✅ clearEffect으로 효과 제거 성공');
+        return;
+      } catch (clearError) {
+        console.log('❌ clearEffect 실패:', clearError);
       }
     }
     
-    console.log('⚠️ 효과 제거 함수를 찾을 수 없음');
+    // 2순위: removeEffect 시도
+    if (availableFunctions.includes('removeEffect')) {
+      try {
+        await deepARInstance.removeEffect();
+        console.log('✅ removeEffect으로 효과 제거 성공');
+        return;
+      } catch (removeError) {
+        console.log('❌ removeEffect 실패:', removeError);
+      }
+    }
+    
+    // 3순위: 빈 효과로 교체 (null 대신 빈 문자열 사용)
+    if (availableFunctions.includes('switchEffect')) {
+      try {
+        await deepARInstance.switchEffect('');
+        console.log('✅ switchEffect으로 효과 제거 성공');
+        return;
+      } catch (switchError) {
+        console.log('❌ switchEffect 실패:', switchError);
+      }
+    }
+    
+    // 4순위: 효과 파라미터들을 0으로 리셋
+    if (availableFunctions.includes('setParameter')) {
+      try {
+        const resetParams = ['intensity', 'strength', 'alpha', 'opacity', 'scale'];
+        let resetCount = 0;
+        
+        for (const param of resetParams) {
+          try {
+            await deepARInstance.setParameter(param, 0);
+            resetCount++;
+          } catch (paramError) {
+            // 조용히 다음 파라미터로 이동
+          }
+        }
+        
+        if (resetCount > 0) {
+          console.log(`✅ 파라미터 리셋으로 효과 제거 (${resetCount}개 파라미터)`);
+          return;
+        }
+      } catch (paramError) {
+        console.log('❌ 파라미터 리셋 실패:', paramError);
+      }
+    }
+    
+    console.log('⚠️ 모든 효과 제거 방법 실패 - 효과가 그대로 유지될 수 있음');
   } catch (error) {
-    console.warn('⚠️ 효과 제거 오류:', error);
+    console.warn('⚠️ 효과 제거 중 전체 오류:', error);
   }
 };
 
@@ -122,6 +163,15 @@ export const applyBeautyEffect = async (
     if (isVeryNegative) {
       // 😔 매우 부정적 감정 - 진입 허가하지만 효과 없음
       console.log('😔 매우 부정적인 감정이지만 진입을 허가합니다. 효과 없음');
+      
+      // 안전한 효과 제거 함수 사용
+      try {
+        await removeEffects(deepARInstance);
+        console.log('✅ 매우 부정적 감정 - 모든 효과 제거됨');
+      } catch (removeError) {
+        console.warn('❌ 효과 제거 실패:', removeError);
+      }
+      
       effectApplied = true; // 효과는 적용하지 않지만 상태는 업데이트
       
     } else if (isNegativeEmotion) {
@@ -178,58 +228,29 @@ export const applyBeautyEffect = async (
       }
       
     } else if (isNeutralEmotion) {
-      // ⚠️ 중립 감정 - 대기 상태
-      console.log('⚠️ 감정 상태 확인 중... 대기해주세요');
+      // ⚠️ 중립 감정 - 대기 상태 (효과 없음)
+      console.log('⚠️ 감정 상태 확인 중... 대기해주세요 (효과 없음)');
       
-      if (availableFunctions.includes('switchEffect')) {
-        try {
-          console.log('👓 기본 관찰 모드 활성화...');
-          await deepARInstance.switchEffect('/effects/aviators');
-          console.log('✅ 관찰 모드 활성화됨');
-          effectApplied = true;
-        } catch (neutralError) {
-          console.warn('❌ 관찰 모드 실패:', neutralError);
-        }
+      // 안전한 효과 제거 함수 사용
+      try {
+        await removeEffects(deepARInstance);
+        console.log('✅ 대기 모드 - 효과 없음');
+        effectApplied = true;
+      } catch (neutralError) {
+        console.warn('❌ 대기 모드 효과 제거 실패:', neutralError);
       }
       
     } else if (isPositiveEmotion) {
-      // ✅ 긍정적 감정 - 입장 허가 & 아름다운 효과
-      console.log('✅ 감정이 안정적입니다. 입장 허가 - 환영 효과 적용');
+      // ✅ 긍정적 감정 - 입장 허가 & 효과 없음 (깔끔한 모드)
+      console.log('✅ 감정이 안정적입니다. 입장 허가 - 효과 없이 깔끔한 모드');
       
-      // 긍정적 감정에 따른 아름다운 효과들 (플라워 효과 제거됨)
-      const welcomeEffects = [
-        { name: '🐨 귀여운 안내', path: '/effects/koala', minIntensity: 0.8 },
-        { name: '🌌 우주적 환영', path: '/effects/galaxy_background', minIntensity: 0.7 },
-        { name: '🕶️ 멋진 입장', path: '/effects/aviators', minIntensity: 0.6 }
-      ];
-      
-      // 긍정적 감정 강도에 따라 효과 선택
-      const selectedWelcome = welcomeEffects.find(effect => intensity >= effect.minIntensity) || welcomeEffects[welcomeEffects.length - 1];
-      
-      if (availableFunctions.includes('switchEffect')) {
-        try {
-          console.log(`🎉 ${selectedWelcome.name} 적용 중... (환영 레벨: ${intensity.toFixed(3)})`);
-          await deepARInstance.switchEffect(selectedWelcome.path);
-          console.log(`✅ 입장 허가 효과: ${selectedWelcome.name}`);
-          effectApplied = true;
-          
-          // 부드러운 강도 적용
-          if (availableFunctions.includes('setParameter')) {
-            const welcomeParams = ['intensity', 'beauty', 'glow', 'warmth', 'brightness'];
-            for (const param of welcomeParams) {
-              try {
-                const welcomeValue = Math.min(intensity * 0.9, 0.8); // 부드럽고 따뜻한 효과
-                await deepARInstance.setParameter(param, welcomeValue);
-                console.log(`🌟 ${param} 환영 강도: ${welcomeValue.toFixed(3)}`);
-                break;
-              } catch (paramError) {
-                // 조용히 다음 파라미터 시도
-              }
-            }
-          }
-        } catch (welcomeError) {
-          console.warn(`❌ 환영 효과 실패: ${selectedWelcome.name}`, welcomeError);
-        }
+      // 안전한 효과 제거 함수 사용
+      try {
+        await removeEffects(deepARInstance);
+        console.log('✅ 깔끔한 모드 활성화됨');
+        effectApplied = true;
+      } catch (cleanError) {
+        console.warn('❌ 효과 제거 실패:', cleanError);
       }
     }
     

@@ -50,6 +50,8 @@ export default function Home() {
   const [deniedMessage, setDeniedMessage] = useState<string>('');
   const [lockTimer, setLockTimer] = useState<number>(0);
   const lockTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isSpeechEnabled, setIsSpeechEnabled] = useState<boolean>(false);
+  const speechTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // 화면 크기 관리
   const { dimensions, updateDimensions } = useDimensions(containerRef);
@@ -91,25 +93,113 @@ export default function Home() {
   // 메모이제이션된 값들
   const videoOpacity = useMemo(() => isDeepARLoaded ? 0 : 1, [isDeepARLoaded]);
 
+  // iOS에서 사용자 터치 시 음성 활성화
+  const enableSpeechOnTouch = useCallback(() => {
+    if (!isSpeechEnabled && 'speechSynthesis' in window) {
+      // 디바이스 정보 로깅
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const isChrome = /Chrome/.test(navigator.userAgent);
+      const isSafari = /Safari/.test(navigator.userAgent) && !isChrome;
+      
+      console.log('📱 디바이스 정보:', {
+        isIOS,
+        isChrome,
+        isSafari,
+        userAgent: navigator.userAgent,
+        speechSynthesis: !!window.speechSynthesis,
+        voices: window.speechSynthesis?.getVoices?.()?.length || 0
+      });
+      
+      // 더미 음성으로 권한 요청
+      const testUtterance = new SpeechSynthesisUtterance('');
+      testUtterance.volume = 0;
+      
+      testUtterance.onstart = () => {
+        console.log('✅ 음성 권한 획득 성공');
+      };
+      
+      testUtterance.onerror = (event) => {
+        console.error('❌ 음성 권한 획득 실패:', event.error);
+      };
+      
+      window.speechSynthesis.speak(testUtterance);
+      setIsSpeechEnabled(true);
+      console.log('🔊 음성 권한 활성화 시도됨');
+    }
+  }, [isSpeechEnabled]);
+
   // 음성 메시지 재생 함수
   const playDeniedMessage = useCallback((message: string) => {
     setDeniedMessage(message);
     
-    // Web Speech API를 사용한 음성 메시지 - 즉시 실행
-    if ('speechSynthesis' in window) {
-      // 기존 음성 중단
-      window.speechSynthesis.cancel();
-      
-      const utterance = new SpeechSynthesisUtterance(message);
-      utterance.lang = 'ko-KR';
-      utterance.rate = 1.2; // 더 빠른 속도로 긴박감 증가
-      utterance.pitch = 0.8; // 약간 낮은 톤으로 경고음 느낌
-      utterance.volume = 1.0; // 최대 볼륨
-      
-      // 즉시 재생
-      window.speechSynthesis.speak(utterance);
+    // 기존 음성 타이머 정리
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
     }
-  }, []);
+    
+    // Web Speech API를 사용한 음성 메시지 - iOS 호환성 개선
+    if ('speechSynthesis' in window && isSpeechEnabled) {
+      // 기존 음성 완전히 중단하고 큐 비우기
+      try {
+        window.speechSynthesis.cancel();
+        // iOS에서 완전한 중단을 위한 추가 대기
+        speechTimeoutRef.current = setTimeout(() => {
+          const utterance = new SpeechSynthesisUtterance(message);
+          utterance.lang = 'ko-KR';
+          utterance.rate = 1.2; // 더 빠른 속도로 긴박감 증가
+          utterance.pitch = 0.8; // 약간 낮은 톤으로 경고음 느낌
+          utterance.volume = 1.0; // 최대 볼륨
+          
+          // iOS에서 음성 재생 보장을 위한 추가 처리
+          utterance.onstart = () => {
+            console.log('✅ 음성 재생 시작:', message);
+          };
+          
+          utterance.onerror = (event) => {
+            // interrupted 오류는 정상적인 상황이므로 경고 레벨로 처리
+            if (event.error === 'interrupted') {
+              console.warn('⚠️ 음성 재생 중단됨 (새로운 음성으로 교체)');
+            } else if (event.error === 'not-allowed') {
+              console.error('❌ 음성 재생 권한 없음 - 사용자 상호작용 필요');
+            } else {
+              console.error('❌ 음성 재생 오류:', event.error);
+            }
+          };
+          
+          utterance.onend = () => {
+            console.log('✅ 음성 재생 완료');
+            speechTimeoutRef.current = null; // 타이머 정리
+          };
+          
+          // iOS Safari/Chrome에서 재생 시도
+          try {
+            // 재생 전 상태 확인
+            if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+              console.log('🔄 기존 음성 대기 중 - 강제 중단 후 재시도');
+              window.speechSynthesis.cancel();
+              setTimeout(() => {
+                window.speechSynthesis.speak(utterance);
+              }, 100);
+            } else {
+              window.speechSynthesis.speak(utterance);
+            }
+          } catch (error) {
+            console.error('❌ 음성 재생 실패:', error);
+            speechTimeoutRef.current = null; // 실패 시 타이머 정리
+          }
+        }, 50); // 50ms 대기로 중단 완료 보장
+      } catch (cancelError) {
+        console.error('❌ 음성 중단 실패:', cancelError);
+      }
+    } else {
+      if (!isSpeechEnabled) {
+        console.warn('⚠️ 음성이 활성화되지 않음 - 화면을 터치해주세요');
+      } else {
+        console.warn('⚠️ Web Speech API가 지원되지 않습니다.');
+      }
+    }
+  }, [isSpeechEnabled]);
 
   // 감정 개찰구 로직
   const processEmotionGate = useCallback((score: number) => {
@@ -135,7 +225,12 @@ export default function Home() {
       if (gateStatus !== 'approved') {
         // 감정이 개선되면 즉시 음성 중단 (denied/locked 상태에서)
         if ('speechSynthesis' in window) {
-          window.speechSynthesis.cancel();
+          try {
+            window.speechSynthesis.cancel();
+            console.log('🔇 감정 개선으로 인한 음성 중단');
+          } catch (cancelError) {
+            console.warn('⚠️ 음성 중단 실패:', cancelError);
+          }
         }
         
         // 진행 중인 락 타이머 취소
@@ -152,7 +247,12 @@ export default function Home() {
       if (gateStatus === 'approved' || gateStatus === 'denied' || gateStatus === 'locked') {
         // 중립 상태로 변경 시에도 음성 중단
         if ('speechSynthesis' in window) {
-          window.speechSynthesis.cancel();
+          try {
+            window.speechSynthesis.cancel();
+            console.log('🔇 중립 상태로 인한 음성 중단');
+          } catch (cancelError) {
+            console.warn('⚠️ 음성 중단 실패:', cancelError);
+          }
         }
         
         // 진행 중인 락 타이머 취소
@@ -174,15 +274,26 @@ export default function Home() {
     cleanupVideo();
     cleanupDeepAR();
     
-    // 음성 중단
+    // 음성 안전하게 중단
     if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+      try {
+        window.speechSynthesis.cancel();
+        console.log('🧹 정리 함수에서 음성 중단 완료');
+      } catch (cancelError) {
+        console.warn('⚠️ 정리 함수에서 음성 중단 실패:', cancelError);
+      }
     }
     
     // 락 타이머 정리
     if (lockTimeoutRef.current) {
       clearTimeout(lockTimeoutRef.current);
       lockTimeoutRef.current = null;
+    }
+    
+    // 음성 타이머 정리
+    if (speechTimeoutRef.current) {
+      clearTimeout(speechTimeoutRef.current);
+      speechTimeoutRef.current = null;
     }
   }, [stopDetectionInterval, cleanupVideo, cleanupDeepAR]);
 
@@ -227,6 +338,19 @@ export default function Home() {
     }
   }, [emotionScore, isModelLoaded, isCameraReady, processEmotionGate]);
 
+  // DeepAR 로드 시 초기 설정
+  useEffect(() => {
+    if (isDeepARLoaded && !isInitializedRef.current) {
+      isInitializedRef.current = true;
+      console.log('DeepAR 초기화 완료 - 모든 효과 제거');
+      
+      // 초기에 모든 효과 제거하여 깔끔한 상태로 시작
+      setTimeout(() => {
+        applyEffect(null);
+      }, 500);
+    }
+  }, [isDeepARLoaded, applyEffect]);
+
   // 감정 개찰구 시스템에 따른 자동 효과 적용
   useEffect(() => {
     if (!isDeepARLoaded || !emotionScore) return;
@@ -255,17 +379,17 @@ export default function Home() {
         }
         applyEffect('beauty', normalizedEmotion);
       } else if (normalizedEmotion >= 0.1 && normalizedEmotion < 0.4) {
-        // 중립 감정 - 관찰 모드
-        if (activeEffect !== 'beauty' || Math.abs(Date.now() % 3000) < 100) { // 3초마다 로그
-          console.log(`⚠️ 감정 상태 확인 중 (${emotionScore.toFixed(1)}%) - 대기 모드`);
+        // 중립 감정 - 관찰 모드 (효과 없음)
+        if (activeEffect === 'beauty') {
+          console.log(`⚠️ 감정 상태 확인 중 (${emotionScore.toFixed(1)}%) - 대기 모드, 효과 제거`);
+          applyEffect(null);
         }
-        applyEffect('beauty', normalizedEmotion);
       } else {
-        // 긍정적 감정 - 입장 허가 및 환영 효과
-        if (activeEffect !== 'beauty' || Math.abs(Date.now() % 2000) < 100) { // 2초마다 로그
-          console.log(`✅ 감정 안정적 (${emotionScore.toFixed(1)}%) - 입장 허가, 환영 효과 적용`);
+        // 긍정적 감정 - 입장 허가 (효과 없음)
+        if (activeEffect === 'beauty') {
+          console.log(`✅ 감정 안정적 (${emotionScore.toFixed(1)}%) - 입장 허가, 효과 제거`);
+          applyEffect(null);
         }
-        applyEffect('beauty', normalizedEmotion);
       }
     }, 200); // 200ms 디바운싱으로 반응성 향상
     
@@ -317,7 +441,12 @@ export default function Home() {
   const gateStyles = getGateStyles();
 
   return (
-    <div className="w-screen h-screen overflow-hidden relative" ref={containerRef}>
+    <div 
+      className="w-screen h-screen overflow-hidden relative" 
+      ref={containerRef}
+      onTouchStart={enableSpeechOnTouch}
+      onClick={enableSpeechOnTouch}
+    >
       <Head>
         <title>감정 개찰구 - 스마일 미러 AR</title>
         <meta name="description" content="감정 인식 기반 출입 통제 시스템" />
@@ -388,6 +517,22 @@ export default function Home() {
         />
       </div>
 
+      {/* 스코어 표시 */}
+      <Score 
+        score={emotionScore}
+      />
+
+      {/* 음성 상태 표시기 */}
+      <div className="absolute top-4 right-4 z-50">
+        <div className={`px-3 py-1 rounded-full text-sm font-bold ${
+          isSpeechEnabled 
+            ? 'bg-green-500 text-white' 
+            : 'bg-red-500 text-white animate-pulse'
+        }`}>
+          {isSpeechEnabled ? '🔊 음성 활성' : '🔇 터치하여 음성 활성화'}
+        </div>
+      </div>
+
       <main className="relative w-full h-full bg-black">
         <video
           ref={videoRef}
@@ -427,9 +572,6 @@ export default function Home() {
             display: 'none'
           }}
         />
-        
-        {/* 점수 표시 */}
-        <Score score={emotionScore} />
         
         {/* 거부 메시지 표시 - 화면 하단 중앙 정렬 */}
         {deniedMessage && (
