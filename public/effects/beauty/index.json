@@ -1,0 +1,14 @@
+{
+  "effects": [
+    {
+      "name": "Beauty Filter",
+      "description": "눈 확대 + 피부 개선 효과",
+      "parameters": {
+        "eyeScale": 1.5,
+        "skinSmoothing": 0.8,
+        "skinWhitening": 0.6,
+        "noseSlimming": 0.4
+      }
+    }
+  ]
+} 

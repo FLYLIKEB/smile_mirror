@@ -1,0 +1,26 @@
+{
+  "name": "Free Beauty Filter",
+  "version": "1.0",
+  "type": "beauty",
+  "description": "무료 뷰티 필터: 자연스러운 메이크업 + 피부 보정",
+  "parameters": {
+    "FaceSmooth": {
+      "min": 0.0,
+      "max": 1.0,
+      "default": 0.8,
+      "description": "피부 보정, 뽀샤시 처리 (무료)"
+    },
+    "MakeupLook": {
+      "min": 0.0,
+      "max": 1.0,
+      "default": 0.6,
+      "description": "자연스러운 메이크업 효과 (눈썹, 입술, 피부톤) (무료)"
+    }
+  },
+  "features": [
+    "face_tracking",
+    "free_beauty_filters",
+    "real_time_processing"
+  ],
+  "license": "free"
+} 
