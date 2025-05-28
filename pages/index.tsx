@@ -110,21 +110,86 @@ export default function Home() {
         voices: window.speechSynthesis?.getVoices?.()?.length || 0
       });
       
-      // 더미 음성으로 권한 요청
-      const testUtterance = new SpeechSynthesisUtterance('');
-      testUtterance.volume = 0;
-      
-      testUtterance.onstart = () => {
-        console.log('✅ 음성 권한 획득 성공');
-      };
-      
-      testUtterance.onerror = (event) => {
-        console.error('❌ 음성 권한 획득 실패:', event.error);
-      };
-      
-      window.speechSynthesis.speak(testUtterance);
-      setIsSpeechEnabled(true);
-      console.log('🔊 음성 권한 활성화 시도됨');
+      // iOS용 강화된 음성 권한 획득
+      try {
+        // 1차: 즉시 더미 음성 재생
+        const testUtterance = new SpeechSynthesisUtterance('');
+        testUtterance.volume = 0;
+        testUtterance.rate = 10; // 빠르게 완료
+        
+        testUtterance.onstart = () => {
+          console.log('✅ 음성 권한 획득 성공');
+          setIsSpeechEnabled(true);
+        };
+        
+        testUtterance.onerror = (event) => {
+          console.error('❌ 음성 권한 획득 실패:', event.error);
+          
+          // iOS에서 실패 시 다른 방법들 시도
+          setTimeout(() => {
+            console.log('🔄 음성 권한 재시도...');
+            
+            // 2차: 짧은 한국어 음성 시도
+            const retryUtterance = new SpeechSynthesisUtterance('테스트');
+            retryUtterance.volume = 0.01; // 거의 들리지 않게
+            retryUtterance.rate = 10;
+            retryUtterance.lang = 'ko-KR';
+            
+            retryUtterance.onstart = () => {
+              console.log('✅ 재시도로 음성 권한 획득');
+              setIsSpeechEnabled(true);
+            };
+            
+            retryUtterance.onerror = (retryEvent) => {
+              console.error('❌ 재시도도 실패:', retryEvent.error);
+              
+              // 3차: Web Audio API로 무음 재생 시도
+              try {
+                const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+                const oscillator = audioContext.createOscillator();
+                const gainNode = audioContext.createGain();
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(audioContext.destination);
+                gainNode.gain.value = 0; // 무음
+                oscillator.frequency.value = 0;
+                oscillator.start();
+                oscillator.stop(audioContext.currentTime + 0.01);
+                
+                console.log('🎵 Web Audio API로 오디오 컨텍스트 활성화');
+                setIsSpeechEnabled(true);
+              } catch (audioError) {
+                console.error('❌ Web Audio API도 실패:', audioError);
+              }
+            };
+            
+            window.speechSynthesis.speak(retryUtterance);
+          }, 500);
+        };
+        
+        testUtterance.onend = () => {
+          if (!isSpeechEnabled) {
+            setIsSpeechEnabled(true);
+            console.log('🔊 음성 권한 onend에서 활성화');
+          }
+        };
+        
+        // 즉시 재생 시도
+        window.speechSynthesis.speak(testUtterance);
+        
+        // iOS에서 즉시 활성화되지 않을 수 있으므로 타이머로 강제 활성화
+        setTimeout(() => {
+          if (!isSpeechEnabled) {
+            console.log('⏰ 타이머로 강제 음성 활성화');
+            setIsSpeechEnabled(true);
+          }
+        }, 1000);
+        
+      } catch (initError) {
+        console.error('❌ 음성 초기화 실패:', initError);
+        // 그래도 활성화 상태로 변경 (시도라도 해보기)
+        setIsSpeechEnabled(true);
+      }
     }
   }, [isSpeechEnabled]);
 
@@ -143,52 +208,101 @@ export default function Home() {
       // 기존 음성 완전히 중단하고 큐 비우기
       try {
         window.speechSynthesis.cancel();
-        // iOS에서 완전한 중단을 위한 추가 대기
-        speechTimeoutRef.current = setTimeout(() => {
+        
+        // iOS에서 음성 로드 완료 대기
+        const waitForVoices = () => {
+          const voices = window.speechSynthesis.getVoices();
+          console.log('🎙️ 사용 가능한 음성:', voices.length, '개');
+          
           const utterance = new SpeechSynthesisUtterance(message);
           utterance.lang = 'ko-KR';
-          utterance.rate = 1.2; // 더 빠른 속도로 긴박감 증가
-          utterance.pitch = 0.8; // 약간 낮은 톤으로 경고음 느낌
-          utterance.volume = 1.0; // 최대 볼륨
+          utterance.rate = 1.0; // iOS에서 안정적인 속도
+          utterance.pitch = 0.8;
+          utterance.volume = 1.0;
           
-          // iOS에서 음성 재생 보장을 위한 추가 처리
+          // iOS에서 한국어 음성 선택 시도
+          const koreaVoice = voices.find(voice => 
+            voice.lang.includes('ko') || 
+            voice.name.includes('Korea') || 
+            voice.name.includes('Korean')
+          );
+          
+          if (koreaVoice) {
+            utterance.voice = koreaVoice;
+            console.log('🇰🇷 한국어 음성 선택:', koreaVoice.name);
+          } else {
+            console.log('⚠️ 한국어 음성 없음, 기본 음성 사용');
+          }
+          
           utterance.onstart = () => {
             console.log('✅ 음성 재생 시작:', message);
           };
           
           utterance.onerror = (event) => {
-            // interrupted 오류는 정상적인 상황이므로 경고 레벨로 처리
             if (event.error === 'interrupted') {
               console.warn('⚠️ 음성 재생 중단됨 (새로운 음성으로 교체)');
             } else if (event.error === 'not-allowed') {
-              console.error('❌ 음성 재생 권한 없음 - 사용자 상호작용 필요');
+              console.error('❌ 음성 재생 권한 없음 - 다시 터치해주세요');
+              setIsSpeechEnabled(false); // 권한 재요청 필요
             } else {
               console.error('❌ 음성 재생 오류:', event.error);
+              
+              // iOS에서 실패 시 재시도
+              setTimeout(() => {
+                console.log('🔄 음성 재생 재시도...');
+                try {
+                  window.speechSynthesis.speak(utterance);
+                } catch (retryError) {
+                  console.error('❌ 재시도도 실패:', retryError);
+                }
+              }, 200);
             }
           };
           
           utterance.onend = () => {
             console.log('✅ 음성 재생 완료');
-            speechTimeoutRef.current = null; // 타이머 정리
+            speechTimeoutRef.current = null;
           };
           
-          // iOS Safari/Chrome에서 재생 시도
+          // iOS에서 안전한 재생
           try {
-            // 재생 전 상태 확인
-            if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
-              console.log('🔄 기존 음성 대기 중 - 강제 중단 후 재시도');
-              window.speechSynthesis.cancel();
-              setTimeout(() => {
+            console.log('🎵 음성 재생 시작 시도:', message.substring(0, 20) + '...');
+            window.speechSynthesis.speak(utterance);
+            
+            // iOS에서 즉시 재생되지 않는 경우 체크
+            setTimeout(() => {
+              if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+                console.log('🔄 음성이 시작되지 않음 - 재시도');
                 window.speechSynthesis.speak(utterance);
-              }, 100);
-            } else {
-              window.speechSynthesis.speak(utterance);
-            }
+              }
+            }, 300);
           } catch (error) {
             console.error('❌ 음성 재생 실패:', error);
-            speechTimeoutRef.current = null; // 실패 시 타이머 정리
+            speechTimeoutRef.current = null;
           }
-        }, 50); // 50ms 대기로 중단 완료 보장
+        };
+        
+        // iOS에서 음성 로드 대기
+        speechTimeoutRef.current = setTimeout(() => {
+          const voices = window.speechSynthesis.getVoices();
+          if (voices.length > 0) {
+            waitForVoices();
+          } else {
+            // 음성이 아직 로드되지 않았다면 이벤트 대기
+            window.speechSynthesis.onvoiceschanged = () => {
+              console.log('🎙️ 음성 로드 완료');
+              waitForVoices();
+              window.speechSynthesis.onvoiceschanged = null;
+            };
+            
+            // 백업: 2초 후 강제 실행
+            setTimeout(() => {
+              console.log('⏰ 음성 로드 타임아웃 - 강제 실행');
+              waitForVoices();
+            }, 2000);
+          }
+        }, 100); // iOS에서 중단 완료 대기
+        
       } catch (cancelError) {
         console.error('❌ 음성 중단 실패:', cancelError);
       }
@@ -408,6 +522,39 @@ export default function Home() {
     }
   }, [lockTimer, gateStatus]);
 
+  // iOS 음성 디버깅용 useEffect
+  useEffect(() => {
+    if ('speechSynthesis' in window) {
+      // 음성 목록 로드 모니터링
+      const logVoices = () => {
+        const voices = window.speechSynthesis.getVoices();
+        console.log('🎙️ 음성 목록 업데이트:', {
+          count: voices.length,
+          korean: voices.filter(v => v.lang.includes('ko')).length,
+          default: voices.filter(v => v.default).length,
+          local: voices.filter(v => v.localService).length
+        });
+        
+        if (voices.length > 0) {
+          const koreanVoices = voices.filter(v => v.lang.includes('ko'));
+          if (koreanVoices.length > 0) {
+            console.log('🇰🇷 한국어 음성 발견:', koreanVoices.map(v => `${v.name} (${v.lang})`));
+          }
+        }
+      };
+      
+      // 초기 음성 체크
+      logVoices();
+      
+      // 음성 변경 이벤트 모니터링
+      window.speechSynthesis.onvoiceschanged = logVoices;
+      
+      return () => {
+        window.speechSynthesis.onvoiceschanged = null;
+      };
+    }
+  }, []);
+
   // 게이트 상태에 따른 스타일 결정
   const getGateStyles = () => {
     switch (gateStatus) {
@@ -524,12 +671,25 @@ export default function Home() {
 
       {/* 음성 상태 표시기 */}
       <div className="absolute top-4 right-4 z-50">
-        <div className={`px-3 py-1 rounded-full text-sm font-bold ${
+        <div className={`px-4 py-2 rounded-lg text-sm font-bold border-2 transition-all duration-300 ${
           isSpeechEnabled 
-            ? 'bg-green-500 text-white' 
-            : 'bg-red-500 text-white animate-pulse'
+            ? 'bg-green-500 text-white border-green-400 shadow-lg' 
+            : 'bg-red-500 text-white border-red-400 animate-pulse shadow-xl'
         }`}>
-          {isSpeechEnabled ? '🔊 음성 활성' : '🔇 터치하여 음성 활성화'}
+          {isSpeechEnabled ? (
+            <div className="flex items-center space-x-2">
+              <span>🔊</span>
+              <span>음성 활성</span>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center space-y-1">
+              <div className="flex items-center space-x-2">
+                <span>🔇</span>
+                <span>음성 비활성</span>
+              </div>
+              <div className="text-xs opacity-90">화면 터치 필요</div>
+            </div>
+          )}
         </div>
       </div>
 
