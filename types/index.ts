@@ -22,8 +22,8 @@ export interface Dimensions {
   height: number;
 }
 
-// AR 효과 타입 - replacement 제거
-export type EffectType = 'blur' | null;
+// AR 효과 타입 - beauty 효과로 변경
+export type EffectType = 'beauty' | null;
 
 // DeepAR 전역 타입
 declare global {

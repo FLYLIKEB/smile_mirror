@@ -53,9 +53,44 @@ export const useFaceAPI = (
       if (detections.length > 0) {
         const expressions = detections[0].expressions;
         const happyScore = expressions.happy;
-        const negativeScore = expressions.sad + expressions.angry + expressions.disgusted;
-        const rawScore = happyScore - negativeScore;
+        const sadScore = expressions.sad;
+        const angryScore = expressions.angry;
+        const disgustedScore = expressions.disgusted;
+        const neutralScore = expressions.neutral;
+        const surprisedScore = expressions.surprised;
+        const fearfulScore = expressions.fearful;
+        
+        // 웃음에 더 우호적인 점수 계산
+        const positiveEmotions = happyScore + (surprisedScore * 0.3); // 놀람도 약간 긍정적으로 간주
+        const negativeEmotions = (sadScore + angryScore + disgustedScore + fearfulScore) * 0.7; // 부정적 감정 가중치 감소
+        
+        // 웃음이 감지되면 보너스 점수 추가
+        let rawScore = positiveEmotions - negativeEmotions;
+        if (happyScore > 0.3) {
+          rawScore += 0.2; // 웃음 보너스
+        }
+        
+        // 중립 상태는 약간 긍정적으로 처리
+        if (neutralScore > 0.5) {
+          rawScore += 0.1;
+        }
+        
         const percentageScore = Math.max(Math.min(rawScore * 100, 100), -100);
+        
+        // 상세한 디버깅 로그 (5초마다)
+        if (Math.abs(Date.now() % 5000) < 100) {
+          console.log('🎭 감정 분석:', {
+            행복: `${(happyScore * 100).toFixed(1)}%`,
+            슬픔: `${(sadScore * 100).toFixed(1)}%`,
+            분노: `${(angryScore * 100).toFixed(1)}%`,
+            혐오: `${(disgustedScore * 100).toFixed(1)}%`,
+            중립: `${(neutralScore * 100).toFixed(1)}%`,
+            놀람: `${(surprisedScore * 100).toFixed(1)}%`,
+            두려움: `${(fearfulScore * 100).toFixed(1)}%`,
+            최종점수: `${percentageScore.toFixed(1)}%`
+          });
+        }
+        
         setEmotionScore(percentageScore);
       }
     } catch (error) {
