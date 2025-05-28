@@ -11,7 +11,7 @@ export const DEFAULT_CANVAS_WIDTH = 640;
 export const DEFAULT_CANVAS_HEIGHT = 480;
 
 // 타이밍 관련 상수
-export const DETECTION_INTERVAL = 200;
+export const DETECTION_INTERVAL = 100;
 export const FRAME_STABILIZATION_DELAY = 2000;
 export const DEEPAR_INIT_TIMEOUT = 5000;
 export const DEEPAR_RETRY_DELAY = 5000; 
