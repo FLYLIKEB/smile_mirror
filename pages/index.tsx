@@ -393,7 +393,7 @@ export default function Home() {
     if (score <= NEGATIVE_THRESHOLD) {
       if (gateStatus !== 'denied' && gateStatus !== 'locked') {
         setGateStatus('denied');
-        playDeniedMessage('감정이 불안정하신 것 같아요. 진입은 잠시 보류됩니다.');
+        playDeniedMessage('감정이 불안정하신 것 같아요. 웃어주세요!');
         
         // 3초 후 락 상태로 전환
         lockTimeoutRef.current = setTimeout(() => {
