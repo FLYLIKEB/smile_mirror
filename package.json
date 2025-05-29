@@ -21,6 +21,7 @@
   "homepage": "https://github.com/FLYLIKEB/smile_mirror#readme",
   "description": "",
   "dependencies": {
+    "@types/html2canvas": "^0.5.35",
     "@types/node": "^20.11.24",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.2.61",

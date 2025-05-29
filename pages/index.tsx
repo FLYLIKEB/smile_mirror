@@ -62,6 +62,9 @@ export default function Home() {
   const [isScreenshotQRVisible, setIsScreenshotQRVisible] = useState<boolean>(false);
   const [hasReached100, setHasReached100] = useState<boolean>(false);
   const lastScoreRef = useRef<number>(0);
+  
+  // 시민ID 상태 관리 (hydration 오류 방지)
+  const [citizenId, setCitizenId] = useState<string>('------');
 
   // 화면 크기 관리
   const { dimensions, updateDimensions } = useDimensions(containerRef);
@@ -426,6 +429,15 @@ export default function Home() {
         
         setGateStatus('approved');
         setLockTimer(0);
+        
+        // 출입 허가 음성 메시지
+        if ('speechSynthesis' in window && isSpeechEnabled) {
+          const approvalUtterance = new SpeechSynthesisUtterance('감정 상태가 적절합니다. 시민 출입을 허가합니다. 건전한 하루 되세요.');
+          approvalUtterance.lang = 'ko-KR';
+          approvalUtterance.rate = 0.9;
+          approvalUtterance.pitch = 1.0;
+          window.speechSynthesis.speak(approvalUtterance);
+        }
       }
     } else {
       if (gateStatus === 'approved' || gateStatus === 'denied' || gateStatus === 'locked') {
@@ -443,7 +455,7 @@ export default function Home() {
         setLockTimer(0);
       }
     }
-  }, [gateStatus, playDeniedMessage, stopSpeech]);
+  }, [gateStatus, playDeniedMessage, stopSpeech, isSpeechEnabled]);
 
   // 정리 함수
   const cleanup = useCallback(() => {
@@ -466,6 +478,9 @@ export default function Home() {
     console.log('컴포넌트 마운트됨');
     updateDimensions();
     loadModels();
+    
+    // 시민ID 생성 (클라이언트에서만)
+    setCitizenId(Date.now().toString().slice(-6));
     
     // 간단한 지연 후 비디오 시작
     setTimeout(() => {
@@ -680,8 +695,8 @@ export default function Home() {
       onClick={enableSpeechOnTouch}
     >
       <Head>
-        <title>감정 개찰구 - 스마일 미러 AR</title>
-        <meta name="description" content="감정 인식 기반 출입 통제 시스템" />
+        <title>감정 조응 도시 - The Compliance of Happiness</title>
+        <meta name="description" content="감정 인식 기반 출입 통제 시스템. 모든 시민의 행복을 위한 과학적 감정 관리." />
         <link rel="icon" href="/favicon.ico" />
       </Head>
 
@@ -690,17 +705,17 @@ export default function Home() {
         {/* 상단 헤더 */}
         <div className="absolute top-0 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-8 py-3 rounded-b-lg border-2 border-gray-700 shadow-lg">
           <div className="text-center">
-            <h1 className="text-xl font-bold mb-1">🚇 감정 개찰구</h1>
+            <h1 className="text-xl font-bold mb-1">🚇 감정 조응 도시</h1>
             <div className={`text-sm font-medium ${
               gateStatus === 'analyzing' ? 'text-blue-300' :
               gateStatus === 'approved' ? 'text-green-300' :
               gateStatus === 'denied' ? 'text-yellow-300' :
               'text-red-300'
             }`}>
-              {gateStatus === 'analyzing' && '📊 감정 분석 중...'}
-              {gateStatus === 'approved' && '✅ 출입 허가됨'}
-              {gateStatus === 'denied' && '⚠️ 출입 거부됨'}
-              {gateStatus === 'locked' && `🔒 출입 제한됨 (${lockTimer}초)`}
+              {gateStatus === 'analyzing' && '📊 감정 스캔 중...'}
+              {gateStatus === 'approved' && '✅ 시민 출입 허가됨'}
+              {gateStatus === 'denied' && '⚠️ 감정 부적절 - 출입 거부'}
+              {gateStatus === 'locked' && `🔒 출입 일시 제한 (${lockTimer}초)`}
             </div>
           </div>
         </div>
@@ -828,10 +843,13 @@ export default function Home() {
         {/* 거부 메시지 표시 - 화면 하단 중앙 정렬 */}
         {deniedMessage && (
           <div className="fixed bottom-0 left-0 right-0 z-40 flex justify-center pb-20 pointer-events-none">
-            <div className="bg-yellow-600 text-white px-8 py-4 rounded-lg text-center max-w-md animate-bounce shadow-2xl border-2 border-yellow-400 pointer-events-auto">
+            <div className="bg-red-600 text-white px-8 py-4 rounded-lg text-center max-w-md animate-bounce shadow-2xl border-2 border-red-400 pointer-events-auto">
               <div className="flex items-center justify-center space-x-2">
-                <span className="text-2xl">🚫</span>
+                <span className="text-2xl">🚨</span>
                 <p className="text-lg font-semibold">{deniedMessage}</p>
+              </div>
+              <div className="text-xs mt-2 opacity-90">
+                시민 행복 지수 향상을 위해 협조해주세요
               </div>
             </div>
           </div>
@@ -839,8 +857,9 @@ export default function Home() {
         
         {/* 시스템 상태 표시 */}
         <div className="fixed bottom-4 left-4 z-40 bg-black bg-opacity-70 text-white px-4 py-2 rounded-lg text-sm">
-          <div>감정 점수: {emotionScore?.toFixed(1) || '분석중'}</div>
+          <div>감정 점수: {emotionScore?.toFixed(1) || '스캔중'}</div>
           <div>시스템: {isModelLoaded && isCameraReady ? '온라인' : '오프라인'}</div>
+          <div className="text-xs text-blue-300">시민ID: {citizenId}</div>
         </div>
         
         <LoadingMessages

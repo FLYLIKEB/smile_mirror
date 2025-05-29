@@ -133,22 +133,170 @@ const ScreenshotQR: React.FC<ScreenshotQRProps> = ({
         throw new Error('모든 스크린샷 방법이 실패했습니다.');
       }
 
-      setScreenshotDataUrl(screenshot);
+      // 이미지 크기 최적화 함수
+      const optimizeImage = (dataUrl: string): Promise<string> => {
+        return new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // 최대 해상도 제한 (800px)
+            const maxSize = 800;
+            let { width, height } = img;
+            
+            if (width > height) {
+              if (width > maxSize) {
+                height = (height * maxSize) / width;
+                width = maxSize;
+              }
+            } else {
+              if (height > maxSize) {
+                width = (width * maxSize) / height;
+                height = maxSize;
+              }
+            }
+            
+            canvas.width = width;
+            canvas.height = height;
+            
+            if (ctx) {
+              ctx.drawImage(img, 0, 0, width, height);
+              // JPEG로 변환하여 크기 대폭 감소 (품질 0.7)
+              const optimizedDataUrl = canvas.toDataURL('image/jpeg', 0.7);
+              console.log('🔧 이미지 최적화 완료:', {
+                original: dataUrl.length,
+                optimized: optimizedDataUrl.length,
+                reduction: `${((1 - optimizedDataUrl.length / dataUrl.length) * 100).toFixed(1)}%`
+              });
+              resolve(optimizedDataUrl);
+            } else {
+              resolve(dataUrl);
+            }
+          };
+          img.src = dataUrl;
+        });
+      };
+
+      // 이미지 최적화 실행
+      const optimizedScreenshot = await optimizeImage(screenshot);
+      setScreenshotDataUrl(optimizedScreenshot);
+
+      // localStorage 정리 함수
+      const cleanupOldPhotos = () => {
+        try {
+          const allKeys = Object.keys(localStorage);
+          const smileKeys = allKeys.filter(key => key.startsWith('smile-mirror-'));
+          
+          // 5개 이상이면 오래된 것부터 삭제
+          if (smileKeys.length >= 5) {
+            // 키에서 타임스탬프 추출하여 정렬
+            const sortedKeys = smileKeys.sort((a, b) => {
+              const timestampA = parseInt(a.split('-')[2]) || 0;
+              const timestampB = parseInt(b.split('-')[2]) || 0;
+              return timestampA - timestampB;
+            });
+            
+            // 오래된 것부터 절반 삭제
+            const keysToDelete = sortedKeys.slice(0, Math.floor(sortedKeys.length / 2));
+            keysToDelete.forEach(key => {
+              localStorage.removeItem(key);
+              console.log('🗑️ 오래된 사진 삭제:', key);
+            });
+            
+            console.log('🧹 localStorage 정리 완료:', {
+              deleted: keysToDelete.length,
+              remaining: smileKeys.length - keysToDelete.length
+            });
+          }
+        } catch (cleanupError) {
+          console.warn('⚠️ localStorage 정리 실패:', cleanupError);
+        }
+      };
+
+      // 기존 데이터 정리
+      cleanupOldPhotos();
 
       // 고유 ID 생성 및 localStorage에 저장
       const photoId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       const photoData = {
         id: photoId,
-        imageData: screenshot,
+        imageData: optimizedScreenshot,
         timestamp: new Date().toISOString(),
         title: `완벽한 미소 ${new Date().toLocaleString()}`
       };
 
       try {
-        localStorage.setItem(`smile-mirror-${photoId}`, JSON.stringify(photoData));
-        console.log('💾 사진 데이터 저장 완료:', photoId);
+        const dataString = JSON.stringify(photoData);
+        const storageKey = `smile-mirror-${photoId}`;
+        
+        console.log('💾 localStorage 저장 시도 (최적화됨):', {
+          photoId,
+          storageKey,
+          dataSize: dataString.length,
+          dataSizeMB: (dataString.length / 1024 / 1024).toFixed(2) + 'MB',
+          timestamp: photoData.timestamp
+        });
+        
+        localStorage.setItem(storageKey, dataString);
+        
+        // 저장 확인
+        const savedData = localStorage.getItem(storageKey);
+        if (savedData) {
+          console.log('✅ localStorage 저장 및 확인 완료:', {
+            saved: true,
+            keyExists: !!savedData,
+            savedSize: savedData.length,
+            savedSizeMB: (savedData.length / 1024 / 1024).toFixed(2) + 'MB',
+            isEqual: dataString === savedData
+          });
+        } else {
+          console.error('❌ localStorage 저장 실패 - 저장된 데이터를 찾을 수 없음');
+        }
+        
+        // localStorage 전체 상태 확인
+        const allKeys = Object.keys(localStorage);
+        const smileKeys = allKeys.filter(key => key.startsWith('smile-mirror-'));
+        const totalSize = JSON.stringify(localStorage).length;
+        console.log('📦 localStorage 현재 상태:', {
+          totalKeys: allKeys.length,
+          smileKeys: smileKeys.length,
+          smileKeysList: smileKeys,
+          totalSize: totalSize,
+          totalSizeMB: (totalSize / 1024 / 1024).toFixed(2) + 'MB'
+        });
+        
       } catch (storageError) {
-        console.warn('⚠️ localStorage 저장 실패:', storageError);
+        console.error('❌ localStorage 저장 실패:', storageError);
+        
+        // 저장소 용량 확인
+        try {
+          const totalSize = JSON.stringify(localStorage).length;
+          const errorMessage = storageError instanceof Error ? storageError.message : String(storageError);
+          console.log('📊 localStorage 사용량:', {
+            totalSize,
+            totalSizeMB: (totalSize / 1024 / 1024).toFixed(2) + 'MB',
+            maxSize: '약 5-10MB (브라우저별 상이)',
+            error: errorMessage
+          });
+          
+          // 긴급 정리 시도
+          if (errorMessage.includes('quota') || errorMessage.includes('QuotaExceededError')) {
+            console.log('🚨 용량 초과로 긴급 정리 시도');
+            cleanupOldPhotos();
+            
+            // 다시 한 번 저장 시도
+            try {
+              const retryStorageKey = `smile-mirror-${photoId}`;
+              localStorage.setItem(retryStorageKey, JSON.stringify(photoData));
+              console.log('✅ 긴급 정리 후 저장 성공');
+            } catch (retryError) {
+              console.error('❌ 긴급 정리 후에도 저장 실패:', retryError);
+            }
+          }
+        } catch (sizeError) {
+          console.log('📊 localStorage 사용량 확인 실패:', sizeError);
+        }
       }
 
       // QR 코드 생성 - 웹 페이지 링크
@@ -180,37 +328,6 @@ const ScreenshotQR: React.FC<ScreenshotQRProps> = ({
     }
   };
 
-  const copyToClipboard = async () => {
-    if (!screenshotDataUrl) return;
-
-    try {
-      // Data URL을 Blob으로 변환
-      const response = await fetch(screenshotDataUrl);
-      const blob = await response.blob();
-      
-      // 클립보드에 이미지 복사
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          [blob.type]: blob
-        })
-      ]);
-      
-      alert('📋 이미지가 클립보드에 복사되었습니다!\n\n다른 앱에서 붙여넣기(Ctrl+V 또는 Cmd+V)로 사용하세요.\n\n• 카카오톡, 텔레그램 등 메신저\n• 포토샵, 그림판 등 이미지 편집기\n• 워드, 파워포인트 등 문서 프로그램');
-      console.log('📋 클립보드 복사 성공');
-    } catch (error) {
-      console.warn('❌ 클립보드 복사 실패:', error);
-      
-      // 폴백: 텍스트로 Data URL 복사
-      try {
-        await navigator.clipboard.writeText(screenshotDataUrl);
-        alert('📋 이미지 데이터가 텍스트로 클립보드에 복사되었습니다.');
-      } catch (textError) {
-        console.error('❌ 텍스트 복사도 실패:', textError);
-        alert('❌ 클립보드 복사에 실패했습니다. 직접 다운로드를 사용해주세요.');
-      }
-    }
-  };
-
   if (!isVisible) return null;
 
   return (
@@ -219,13 +336,13 @@ const ScreenshotQR: React.FC<ScreenshotQRProps> = ({
         {/* 헤더 */}
         <div className="mb-6">
           <h2 className="text-2xl font-bold text-gray-800 mb-2">
-            🎉 100점 달성!
+            🎫 시민 출입증 발급
           </h2>
           <p className="text-gray-600">
-            완벽한 미소를 포착했습니다!
+            감정 상태가 적절합니다. 출입증을 발급합니다.
           </p>
           <div className="mt-3 text-lg font-semibold text-red-500">
-            ⏰ {timeLeft}초 후 자동 닫힘
+            ⏰ {timeLeft}초 후 자동 종료
           </div>
         </div>
 
@@ -259,7 +376,7 @@ const ScreenshotQR: React.FC<ScreenshotQRProps> = ({
         {qrCodeDataUrl && !isGenerating && (
           <div className="mb-6">
             <h3 className="text-lg font-semibold text-gray-800 mb-3">
-              📱 QR 코드로 사진 보기
+              📱 디지털 출입증
             </h3>
             <div className="bg-gray-50 p-4 rounded-lg">
               <img 
@@ -268,10 +385,10 @@ const ScreenshotQR: React.FC<ScreenshotQRProps> = ({
                 className="w-32 h-32 mx-auto"
               />
               <p className="text-sm text-gray-600 mt-2">
-                스마트폰으로 스캔하면 전용 페이지에서 사진을 볼 수 있습니다
+                스마트폰으로 스캔하면 출입증을 확인할 수 있습니다
               </p>
               <p className="text-xs text-gray-500 mt-1">
-                링크를 공유하여 다른 사람과도 사진을 나눌 수 있어요!
+                발급일시, 감정점수, 시민ID가 포함됩니다
               </p>
             </div>
           </div>
@@ -279,14 +396,6 @@ const ScreenshotQR: React.FC<ScreenshotQRProps> = ({
 
         {/* 버튼들 */}
         <div className="flex flex-col gap-3 justify-center">
-          {screenshotDataUrl && (
-            <button
-              onClick={copyToClipboard}
-              className="bg-green-500 hover:bg-green-600 text-white px-8 py-4 rounded-lg font-semibold transition-colors text-lg shadow-lg"
-            >
-              📋 클립보드에 복사하기
-            </button>
-          )}
           <button
             onClick={onClose}
             className="bg-gray-500 hover:bg-gray-600 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
