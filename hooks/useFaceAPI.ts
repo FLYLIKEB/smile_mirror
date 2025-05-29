@@ -92,6 +92,15 @@ export const useFaceAPI = (
         }
         
         setEmotionScore(percentageScore);
+      } else {
+        // 얼굴이 감지되지 않을 때 중립 점수 (10점) 설정
+        const neutralScore = 10;
+        setEmotionScore(neutralScore);
+        
+        // 얼굴 미감지 로그 (5초마다)
+        if (Math.abs(Date.now() % 5000) < 100) {
+          console.log('👤 얼굴 미감지 - 중립 점수 적용:', `${neutralScore}%`);
+        }
       }
     } catch (error) {
       console.warn('표정 감지 중 오류:', error);
