@@ -4,6 +4,7 @@ import Score from '../components/Score';
 import AREffectButtons from '../components/AREffectButtons';
 import LoadingMessages from '../components/LoadingMessages';
 import EmotionGateOverlay from '../components/EmotionGateOverlay';
+import ScreenshotQR from '../components/ScreenshotQR';
 import { useDeepAR } from '../hooks/useDeepAR';
 import { useFaceAPI } from '../hooks/useFaceAPI';
 import { useVideo } from '../hooks/useVideo';
@@ -57,6 +58,11 @@ export default function Home() {
   const [isSpeechPlaying, setIsSpeechPlaying] = useState<boolean>(false);
   const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
+  // 스크린샷 QR 상태 관리
+  const [isScreenshotQRVisible, setIsScreenshotQRVisible] = useState<boolean>(false);
+  const [hasReached100, setHasReached100] = useState<boolean>(false);
+  const lastScoreRef = useRef<number>(0);
+
   // 화면 크기 관리
   const { dimensions, updateDimensions } = useDimensions(containerRef);
 
@@ -79,6 +85,7 @@ export default function Home() {
     applyEffect,
     updateCanvasSize: updateDeepARCanvasSize,
     cleanup: cleanupDeepAR,
+    takeScreenshot: takeDeepARScreenshot,
     setDeepARBackground
   } = useDeepAR(deepARCanvasRef, videoRef, dimensions);
 
@@ -475,14 +482,18 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (isModelLoaded && isCameraReady) {
+    if (isModelLoaded && isCameraReady && !isScreenshotQRVisible) {
+      console.log('🔍 감정 감지 시작');
       startDetectionInterval();
     } else {
+      if (isScreenshotQRVisible) {
+        console.log('📸 스크린샷 모달 열림 - 감정 감지 중지');
+      }
       stopDetectionInterval();
     }
     
     return stopDetectionInterval;
-  }, [isModelLoaded, isCameraReady, startDetectionInterval, stopDetectionInterval]);
+  }, [isModelLoaded, isCameraReady, isScreenshotQRVisible, startDetectionInterval, stopDetectionInterval]);
 
   useEffect(() => {
     updateDeepARCanvasSize();
@@ -490,10 +501,10 @@ export default function Home() {
 
   // 감정 스코어 변화에 따른 개찰구 처리
   useEffect(() => {
-    if (emotionScore !== null && isModelLoaded && isCameraReady) {
+    if (emotionScore !== null && isModelLoaded && isCameraReady && !isScreenshotQRVisible) {
       processEmotionGate(emotionScore);
     }
-  }, [emotionScore, isModelLoaded, isCameraReady, processEmotionGate]);
+  }, [emotionScore, isModelLoaded, isCameraReady, isScreenshotQRVisible, processEmotionGate]);
 
   // DeepAR 로드 시 초기 설정
   useEffect(() => {
@@ -510,13 +521,44 @@ export default function Home() {
 
   // 감정 개찰구 시스템에 따른 자동 효과 적용
   useEffect(() => {
-    if (!isDeepARLoaded || !emotionScore) return;
+    if (!isDeepARLoaded || !emotionScore || isScreenshotQRVisible) {
+      // 모달이 열렸을 때는 효과 적용 중지
+      if (isScreenshotQRVisible) {
+        console.log('📸 스크린샷 모달 열림 - 효과 적용 중지');
+      }
+      return;
+    }
     
     // 스코어 값 검증 (-100~100 범위 확인)
     if (emotionScore < -100 || emotionScore > 100) {
       console.warn(`비정상적인 감정 점수: ${emotionScore}, 무시됨`);
       return;
     }
+
+    // 100점 달성 감지 로직
+    if (emotionScore >= 100 && lastScoreRef.current < 100 && !hasReached100) {
+      console.log('🎉 100점 달성! 스크린샷 QR 모달 표시');
+      setHasReached100(true);
+      setIsScreenshotQRVisible(true);
+      
+      // 축하 효과나 소리 등 추가 가능
+      if ('speechSynthesis' in window && isSpeechEnabled) {
+        const congratsUtterance = new SpeechSynthesisUtterance('완벽한 미소입니다! 스크린샷이 촬영되었습니다!');
+        congratsUtterance.lang = 'ko-KR';
+        congratsUtterance.rate = 0.9;
+        congratsUtterance.pitch = 1.2;
+        window.speechSynthesis.speak(congratsUtterance);
+      }
+    }
+    
+    // 점수가 90 아래로 떨어지면 100점 달성 상태 리셋 (재도전 허용)
+    if (emotionScore < 90 && hasReached100) {
+      setHasReached100(false);
+      console.log('📊 점수 하락으로 100점 달성 상태 리셋');
+    }
+    
+    // 이전 점수 저장
+    lastScoreRef.current = emotionScore;
     
     // 안정적인 디바운싱을 위한 타이머
     const debounceTimer = setTimeout(() => {
@@ -551,7 +593,7 @@ export default function Home() {
     }, 200); // 200ms 디바운싱으로 반응성 향상
     
     return () => clearTimeout(debounceTimer);
-  }, [emotionScore, isDeepARLoaded, activeEffect, applyEffect]);
+  }, [emotionScore, isDeepARLoaded, activeEffect, applyEffect, hasReached100, isSpeechEnabled, isScreenshotQRVisible]);
 
   // 락 타이머 카운트다운
   useEffect(() => {
@@ -807,6 +849,15 @@ export default function Home() {
           isDeepARLoaded={isDeepARLoaded}
         />
       </main>
+
+      {/* 100점 달성 시 스크린샷 QR 모달 */}
+      <ScreenshotQR
+        isVisible={isScreenshotQRVisible}
+        videoRef={videoRef}
+        deepARCanvasRef={deepARCanvasRef}
+        takeDeepARScreenshot={takeDeepARScreenshot}
+        onClose={() => setIsScreenshotQRVisible(false)}
+      />
     </div>
   );
 } 

@@ -249,6 +249,32 @@ export const useDeepAR = (
     isInitializingRef.current = false;
   }, []);
 
+  // DeepAR 스크린샷 기능
+  const takeScreenshot = useCallback(async (): Promise<string | null> => {
+    if (!deepARRef.current || !isDeepARLoaded) {
+      console.warn('⚠️ DeepAR이 준비되지 않아 스크린샷을 촬영할 수 없습니다.');
+      return null;
+    }
+
+    try {
+      console.log('📸 DeepAR 스크린샷 촬영 시작...');
+      
+      // DeepAR의 takeScreenshot API 사용
+      const screenshot = await deepARRef.current.takeScreenshot();
+      
+      if (screenshot) {
+        console.log('✅ DeepAR 스크린샷 촬영 성공');
+        return screenshot; // Base64 데이터 URL 반환
+      } else {
+        console.warn('⚠️ DeepAR 스크린샷이 비어있습니다.');
+        return null;
+      }
+    } catch (error) {
+      console.error('❌ DeepAR 스크린샷 촬영 실패:', error);
+      return null;
+    }
+  }, [isDeepARLoaded]);
+
   return {
     isDeepARLoaded,
     activeEffect,
@@ -256,6 +282,7 @@ export const useDeepAR = (
     applyEffect,
     updateCanvasSize,
     cleanup,
+    takeScreenshot,
     setDeepARBackground: () => setDeepARBackground(deepARRef.current)
   };
 }; 
