@@ -608,14 +608,14 @@ export default function Home() {
         }
         
         setGateStatus('denied');
-        playDeniedMessage('감정이 불안정하신 것 같아요. 웃어주세요!');
+        playDeniedMessage('감정이 불안정하신 것 같아요. 한김 식히고 오세요 :)');
         
         // 3초 후 락 상태로 전환
         lockTimeoutRef.current = setTimeout(() => {
           console.log(`⏰ 3초 경과 - 락 상태로 전환 (현재 상태: ${gateStatus})`);
           
           // 2단계 더 극한 경고 메시지 먼저 재생
-          playDeniedMessage('시스템 오류가 발생했습니다. 감정 불안정이 감지되어 미러 사용이 일시적으로 제한됩니다.');
+          playDeniedMessage('공공안전을 위해 출입이 제한됩니다. 적절한 감정 상태로 조정 후 다시 시도해주세요.');
           
           // 음성과 동시에 락 상태와 타이머 설정 (동시 업데이트)
           setGateStatus('locked');
@@ -871,9 +871,9 @@ export default function Home() {
         };
       case 'locked':
         return {
-          overlay: 'bg-red-700 bg-opacity-50',
+          overlay: 'bg-red-700 bg-opacity-70',
           border: 'border-red-700 border-8 animate-pulse',
-          filter: 'contrast(150%) saturate(200%) hue-rotate(20deg) blur(1px)'
+          filter: 'contrast(200%) saturate(300%) hue-rotate(30deg) blur(2px) brightness(80%)'
         };
       case 'approved':
         return {
@@ -900,8 +900,8 @@ export default function Home() {
       onClick={enableSpeechOnTouch}
     >
       <Head>
-        <title>스마일 미러 - Smile Mirror</title>
-        <meta name="description" content="당신의 완벽한 미소를 위한 AR 뷰티 미러 앱" />
+        <title>HappyGate - 감정 출입 통제 시스템</title>
+        <meta name="description" content="공공안전을 위한 감정 상태 검증 및 출입 통제 시스템" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
 
@@ -910,17 +910,17 @@ export default function Home() {
         {/* 상단 헤더 */}
         <div className="absolute top-0 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-8 py-3 rounded-b-lg border-2 border-gray-700 shadow-lg">
           <div className="text-center">
-            <h1 className="text-xl font-bold mb-1">✨ 스마일 미러</h1>
-            <div className={`text-sm font-medium ${
+            <h1 className="text-xl font-bold mb-1 font-mono">🏛️ HAPPY GATE</h1>
+            <div className={`text-sm font-medium font-mono ${
               gateStatus === 'analyzing' ? 'text-blue-300' :
               gateStatus === 'approved' ? 'text-green-300' :
               gateStatus === 'denied' ? 'text-yellow-300' :
               'text-red-300'
             }`}>
-              {gateStatus === 'analyzing' && '📊 표정 분석 중...'}
-              {gateStatus === 'approved' && '😊 완벽한 미소!'}
-              {gateStatus === 'denied' && '😔 더 밝게 웃어보세요!'}
-              {gateStatus === 'locked' && `⏳ 잠시 기다려주세요 (${lockTimer}초)`}
+              {gateStatus === 'analyzing' && '🔍 생체 스캔 진행 중'}
+              {gateStatus === 'approved' && '✅ 출입 허가됨'}
+              {gateStatus === 'denied' && '⚠️ 감정 조정 요구됨'}
+              {gateStatus === 'locked' && `🚫 출입 제한 (${lockTimer}초)`}
             </div>
           </div>
         </div>
@@ -1053,8 +1053,8 @@ export default function Home() {
                 <span className="text-2xl">🚨</span>
                 <p className="text-lg font-semibold">{deniedMessage}</p>
               </div>
-              <div className="text-xs mt-2 opacity-90">
-                더 밝게 웃어주세요!
+              <div className="text-xs mt-2 opacity-90 font-mono">
+                시스템 지시에 따라 적절한 감정을 표현해주세요
               </div>
             </div>
           </div>
