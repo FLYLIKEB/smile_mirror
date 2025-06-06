@@ -4,7 +4,6 @@ import Score from '../components/Score';
 import AREffectButtons from '../components/AREffectButtons';
 import LoadingMessages from '../components/LoadingMessages';
 import EmotionGateOverlay from '../components/EmotionGateOverlay';
-import ScreenshotQR from '../components/ScreenshotQR';
 import { useDeepAR } from '../hooks/useDeepAR';
 import { useFaceAPI } from '../hooks/useFaceAPI';
 import { useVideo } from '../hooks/useVideo';
@@ -25,14 +24,6 @@ interface CanvasDimensions {
   displayWidth: number;
   displayHeight: number;
   aspectRatio: number;
-}
-
-interface VideoConstraints {
-  video: {
-    facingMode: string;
-    width: { ideal: number };
-    height: { ideal: number };
-  };
 }
 
 // 감정 상태 타입
@@ -58,11 +49,11 @@ export default function Home() {
   const [isSpeechPlaying, setIsSpeechPlaying] = useState<boolean>(false);
   const currentUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
 
-  // 스크린샷 QR 상태 관리
-  const [isScreenshotQRVisible, setIsScreenshotQRVisible] = useState<boolean>(false);
-  const [hasReached100, setHasReached100] = useState<boolean>(false);
-  const lastScoreRef = useRef<number>(0);
-  
+  // 감정 처리 디바운싱을 위한 상태 추가
+  const emotionProcessingRef = useRef<NodeJS.Timeout | null>(null);
+  const lastEmotionChangeRef = useRef<number>(Date.now());
+  const isProcessingEmotionRef = useRef<boolean>(false);
+
   // 시민ID 상태 관리 (hydration 오류 방지)
   const [citizenId, setCitizenId] = useState<string>('------');
 
@@ -107,103 +98,194 @@ export default function Home() {
   // 메모이제이션된 값들
   const videoOpacity = useMemo(() => isDeepARLoaded ? 0 : 1, [isDeepARLoaded]);
 
+  // 클라이언트 측에서만 시민ID 생성
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const randomId = `SM${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+      setCitizenId(randomId);
+    }
+  }, []);
+
+  // 정리 함수
+  const cleanup = useCallback(() => {
+    stopDetectionInterval();
+    cleanupVideo();
+    cleanupDeepAR();
+    
+    // 음성 중단
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    
+    // 락 타이머 정리
+    if (lockTimeoutRef.current) {
+      clearTimeout(lockTimeoutRef.current);
+      lockTimeoutRef.current = null;
+    }
+  }, [stopDetectionInterval, cleanupVideo, cleanupDeepAR]);
+
+  // Effects
+  useEffect(() => {
+    console.log('컴포넌트 마운트됨');
+    updateDimensions();
+    loadModels();
+    
+    // 간단한 지연 후 비디오 시작
+    setTimeout(() => {
+      console.log('지연 후 비디오 시작 시도');
+      startVideo();
+    }, 1000);
+    
+    window.addEventListener('resize', updateDimensions);
+    
+    return () => {
+      window.removeEventListener('resize', updateDimensions);
+      cleanup();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isModelLoaded && isCameraReady) {
+      console.log('🔍 감정 감지 시작');
+      startDetectionInterval();
+    } else {
+      stopDetectionInterval();
+    }
+    
+    return stopDetectionInterval;
+  }, [isModelLoaded, isCameraReady, startDetectionInterval, stopDetectionInterval]);
+
+  useEffect(() => {
+    updateDeepARCanvasSize();
+  }, [updateDeepARCanvasSize]);
+
   // iOS에서 사용자 터치 시 음성 활성화
   const enableSpeechOnTouch = useCallback(() => {
+    // 즉시 간단한 테스트 음성 재생
+    console.log('🧪 즉시 테스트 음성 재생 시도');
+    if ('speechSynthesis' in window) {
+      const testMsg = new SpeechSynthesisUtterance('테스트');
+      testMsg.volume = 1.0;
+      testMsg.rate = 1.0;
+      testMsg.lang = 'ko-KR';
+      
+      testMsg.onstart = () => console.log('🔊 테스트 음성 시작됨');
+      testMsg.onend = () => console.log('✅ 테스트 음성 완료됨');
+      testMsg.onerror = (e) => console.error('❌ 테스트 음성 오류:', e.error);
+      
+      window.speechSynthesis.speak(testMsg);
+    }
+    
     if (!isSpeechEnabled && 'speechSynthesis' in window) {
       // 디바이스 정보 로깅
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const isMac = /Macintosh|MacIntel|MacPPC|Mac68K/.test(navigator.userAgent);
       const isChrome = /Chrome/.test(navigator.userAgent);
       const isSafari = /Safari/.test(navigator.userAgent) && !isChrome;
       
       console.log('📱 디바이스 정보:', {
         isIOS,
+        isMac,
         isChrome,
         isSafari,
         userAgent: navigator.userAgent,
         speechSynthesis: !!window.speechSynthesis,
-        voices: window.speechSynthesis?.getVoices?.()?.length || 0
+        voices: window.speechSynthesis?.getVoices?.()?.length || 0,
+        platform: navigator.platform
       });
-      
-      // iOS용 강화된 음성 권한 획득
+
+      // 추가 음성 시스템 정보
+      console.log('🎙️ 상세 음성 시스템 정보:', {
+        speechSynthesisReady: window.speechSynthesis ? true : false,
+        speaking: window.speechSynthesis?.speaking || false,
+        pending: window.speechSynthesis?.pending || false,
+        paused: window.speechSynthesis?.paused || false,
+        getVoicesLength: window.speechSynthesis?.getVoices?.()?.length || 0
+      });
+
+      // 맥북 크롬용 강화된 음성 권한 획득
       try {
-        // 1차: 즉시 더미 음성 재생
-        const testUtterance = new SpeechSynthesisUtterance('');
-        testUtterance.volume = 0;
-        testUtterance.rate = 10; // 빠르게 완료
+        // 먼저 음성 목록 확인
+        const initialVoices = window.speechSynthesis.getVoices();
+        console.log('🎙️ 초기 음성 목록:', initialVoices.length, '개');
         
-        testUtterance.onstart = () => {
-          console.log('✅ 음성 권한 획득 성공');
-          setIsSpeechEnabled(true);
-        };
-        
-        testUtterance.onerror = (event) => {
-          console.error('❌ 음성 권한 획득 실패:', event.error);
+        // 음성 테스트 함수
+        const testSpeech = () => {
+          const testUtterance = new SpeechSynthesisUtterance('안녕');
+          testUtterance.volume = 0.01;
+          testUtterance.rate = 3.0;
+          testUtterance.lang = 'ko-KR';
           
-          // iOS에서 실패 시 다른 방법들 시도
-          setTimeout(() => {
-            console.log('🔄 음성 권한 재시도...');
-            
-            // 2차: 짧은 한국어 음성 시도
-            const retryUtterance = new SpeechSynthesisUtterance('테스트');
-            retryUtterance.volume = 0.01; // 거의 들리지 않게
-            retryUtterance.rate = 10;
-            retryUtterance.lang = 'ko-KR';
-            
-            retryUtterance.onstart = () => {
-              console.log('✅ 재시도로 음성 권한 획득');
+          const voices = window.speechSynthesis.getVoices();
+          const koreaVoice = voices.find(voice => 
+            voice.lang.includes('ko') || 
+            voice.name.includes('Yuna') || 
+            voice.name.includes('지연')
+          );
+          
+          if (koreaVoice) {
+            testUtterance.voice = koreaVoice;
+            console.log('🇰🇷 한국어 음성 선택:', koreaVoice.name);
+          }
+
+          let permissionGranted = false;
+
+          testUtterance.onstart = () => {
+            console.log('✅ 음성 권한 획득 성공');
+            permissionGranted = true;
+            setIsSpeechEnabled(true);
+          };
+          
+          testUtterance.onerror = (event) => {
+            if (event.error === 'canceled') {
+              console.log('⚠️ 테스트 음성 중단됨 - 권한은 획득됨');
+            } else if (event.error === 'not-allowed') {
+              console.error('🚫 음성 권한 거부됨');
+              alert('음성 권한이 필요합니다. 브라우저 설정을 확인해주세요.');
+              return;
+            }
+            setIsSpeechEnabled(true);
+            permissionGranted = true;
+          };
+
+          testUtterance.onend = () => {
+            console.log('✅ 음성 테스트 완료');
+            if (!permissionGranted) {
               setIsSpeechEnabled(true);
-            };
-            
-            retryUtterance.onerror = (retryEvent) => {
-              console.error('❌ 재시도도 실패:', retryEvent.error);
-              
-              // 3차: Web Audio API로 무음 재생 시도
-              try {
-                const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-                const oscillator = audioContext.createOscillator();
-                const gainNode = audioContext.createGain();
-                
-                oscillator.connect(gainNode);
-                gainNode.connect(audioContext.destination);
-                gainNode.gain.value = 0; // 무음
-                oscillator.frequency.value = 0;
-                oscillator.start();
-                oscillator.stop(audioContext.currentTime + 0.01);
-                
-                console.log('🎵 Web Audio API로 오디오 컨텍스트 활성화');
-                setIsSpeechEnabled(true);
-              } catch (audioError) {
-                console.error('❌ Web Audio API도 실패:', audioError);
-              }
-            };
-            
-            window.speechSynthesis.speak(retryUtterance);
-          }, 500);
+            }
+          };
+          
+          console.log('🎵 음성 테스트 시작...');
+          window.speechSynthesis.speak(testUtterance);
+          
+          setTimeout(() => {
+            if (!permissionGranted) {
+              console.log('⏰ 타이머로 음성 활성화');
+              setIsSpeechEnabled(true);
+            }
+          }, 2000);
         };
         
-        testUtterance.onend = () => {
-          if (!isSpeechEnabled) {
-            setIsSpeechEnabled(true);
-            console.log('🔊 음성 권한 onend에서 활성화');
-          }
-        };
+        if (initialVoices.length === 0) {
+          // 음성 목록 로딩 대기
+          window.speechSynthesis.onvoiceschanged = () => {
+            console.log('✅ 음성 목록 로드 완료');
+            testSpeech();
+            window.speechSynthesis.onvoiceschanged = null;
+          };
+          setTimeout(testSpeech, 3000); // 백업 타이머
+        } else {
+          testSpeech();
+        }
         
-        // 즉시 재생 시도
-        window.speechSynthesis.speak(testUtterance);
-        
-        // iOS에서 즉시 활성화되지 않을 수 있으므로 타이머로 강제 활성화
-        setTimeout(() => {
-          if (!isSpeechEnabled) {
-            console.log('⏰ 타이머로 강제 음성 활성화');
-            setIsSpeechEnabled(true);
-          }
-        }, 1000);
-        
-      } catch (initError) {
-        console.error('❌ 음성 초기화 실패:', initError);
-        // 그래도 활성화 상태로 변경 (시도라도 해보기)
+      } catch (error) {
+        console.error('❌ 음성 초기화 실패:', error);
         setIsSpeechEnabled(true);
       }
+    } else if (isSpeechEnabled) {
+      console.log('🔊 음성이 이미 활성화되어 있습니다.');
+    } else {
+      console.error('❌ Web Speech API가 지원되지 않습니다.');
     }
   }, [isSpeechEnabled]);
 
@@ -211,10 +293,33 @@ export default function Home() {
   const stopSpeech = useCallback((reason: string = '사용자 요청') => {
     console.log(`🔇 음성 중단 시도: ${reason}`);
     
+    // 음성이 재생 중이고 중립 상태 변화로 인한 중단이라면 잠시 대기
+    if (isSpeechPlaying && reason === '중립 상태' && currentUtteranceRef.current) {
+      console.log('⏳ 음성 재생 중 - 중립 상태 중단을 3초 지연');
+      setTimeout(() => {
+        // 3초 후에도 여전히 중립이고 음성이 재생 중이면 중단
+        if (isSpeechPlaying && currentUtteranceRef.current) {
+          console.log('🔇 지연된 음성 중단 실행');
+          performSpeechStop(reason);
+        }
+      }, 3000);
+      return;
+    }
+    
+    // 즉시 중단이 필요한 경우들
+    if (reason === '감정 개선됨' || reason === '새 음성 재생 준비' || reason === '사용자 요청') {
+      performSpeechStop(reason);
+    } else {
+      // 기타 경우는 즉시 중단
+      performSpeechStop(reason);
+    }
+  }, [isSpeechPlaying]);
+
+  const performSpeechStop = useCallback((reason: string) => {
     // 음성 상태 즉시 업데이트
     setIsSpeechPlaying(false);
     setDeniedMessage('');
-    
+
     // 현재 utterance 참조 정리
     if (currentUtteranceRef.current) {
       currentUtteranceRef.current = null;
@@ -264,141 +369,220 @@ export default function Home() {
 
   // 음성 메시지 재생 함수
   const playDeniedMessage = useCallback((message: string) => {
+    console.log('🎵 playDeniedMessage 호출됨:', message.substring(0, 30) + '...');
+    console.log('🔊 현재 음성 상태:', { isSpeechEnabled, isSpeechPlaying });
+    
+    // Audio 컨텍스트 테스트 (백업 시스템)
+    try {
+      console.log('🎵 Audio 컨텍스트 테스트 시작');
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const oscillator = audioContext.createOscillator();
+      const gainNode = audioContext.createGain();
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(audioContext.destination);
+      gainNode.gain.value = 0.1;
+      oscillator.frequency.value = 440; // A4 음
+      oscillator.start();
+      oscillator.stop(audioContext.currentTime + 0.1);
+      
+      console.log('✅ Audio 컨텍스트 테스트 성공');
+    } catch (audioError) {
+      console.error('❌ Audio 컨텍스트 테스트 실패:', audioError);
+    }
+    
     // 이미 재생 중이면 먼저 중단
     if (isSpeechPlaying) {
       console.log('🔄 기존 음성 중단 후 새 음성 재생');
       stopSpeech('새 음성 재생 준비');
     }
     
+    // 음성이 비활성화되어 있으면 터치 안내
+    if (!isSpeechEnabled) {
+      console.warn('⚠️ 음성이 비활성화됨 - 화면을 터치해주세요');
+      setDeniedMessage(message);
+      return;
+    }
+    
     setDeniedMessage(message);
     setIsSpeechPlaying(true);
     
-    // Web Speech API를 사용한 음성 메시지 - iOS 호환성 개선
-    if ('speechSynthesis' in window && isSpeechEnabled) {
-      // iOS에서 음성 로드 완료 대기
-      const waitForVoices = () => {
-        const voices = window.speechSynthesis.getVoices();
-        console.log('🎙️ 사용 가능한 음성:', voices.length, '개');
-        
-        const utterance = new SpeechSynthesisUtterance(message);
-        utterance.lang = 'ko-KR';
-        utterance.rate = 1.0; // iOS에서 안정적인 속도
-        utterance.pitch = 0.8;
-        utterance.volume = 1.0;
-        
-        // 현재 utterance 참조 저장
-        currentUtteranceRef.current = utterance;
-        
-        // iOS에서 한국어 음성 선택 시도
-        const koreaVoice = voices.find(voice => 
-          voice.lang.includes('ko') || 
-          voice.name.includes('Korea') || 
-          voice.name.includes('Korean')
-        );
-        
-        if (koreaVoice) {
-          utterance.voice = koreaVoice;
-          console.log('🇰🇷 한국어 음성 선택:', koreaVoice.name);
-        } else {
-          console.log('⚠️ 한국어 음성 없음, 기본 음성 사용');
-        }
-        
-        utterance.onstart = () => {
-          console.log('✅ 음성 재생 시작:', message);
-          setIsSpeechPlaying(true);
-        };
-        
-        utterance.onerror = (event) => {
-          console.log(`❌ 음성 오류 (${event.error}):`, message);
-          setIsSpeechPlaying(false);
-          currentUtteranceRef.current = null;
-          
-          if (event.error === 'interrupted') {
-            console.warn('⚠️ 음성 재생 중단됨 (정상적인 중단)');
-          } else if (event.error === 'not-allowed') {
-            console.error('❌ 음성 재생 권한 없음 - 다시 터치해주세요');
-            setIsSpeechEnabled(false); // 권한 재요청 필요
-          } else {
-            // iOS에서 실패 시 재시도 (단, 현재 utterance가 여전히 유효한 경우만)
-            if (currentUtteranceRef.current === utterance) {
-              setTimeout(() => {
-                console.log('🔄 음성 재생 재시도...');
-                try {
-                  window.speechSynthesis.speak(utterance);
-                } catch (retryError) {
-                  console.error('❌ 재시도도 실패:', retryError);
-                  setIsSpeechPlaying(false);
-                  currentUtteranceRef.current = null;
-                }
-              }, 200);
-            }
-          }
-        };
-        
-        utterance.onend = () => {
-          console.log('✅ 음성 재생 완료');
-          setIsSpeechPlaying(false);
-          currentUtteranceRef.current = null;
-          speechTimeoutRef.current = null;
-        };
-        
-        // iOS에서 안전한 재생
-        try {
-          console.log('🎵 음성 재생 시작 시도:', message.substring(0, 20) + '...');
-          window.speechSynthesis.speak(utterance);
-          
-          // iOS에서 즉시 재생되지 않는 경우 체크
-          setTimeout(() => {
-            if (currentUtteranceRef.current === utterance && 
-                !window.speechSynthesis.speaking && 
-                !window.speechSynthesis.pending) {
-              console.log('🔄 음성이 시작되지 않음 - 재시도');
-              window.speechSynthesis.speak(utterance);
-            }
-          }, 300);
-        } catch (error) {
-          console.error('❌ 음성 재생 실패:', error);
-          setIsSpeechPlaying(false);
-          currentUtteranceRef.current = null;
-          speechTimeoutRef.current = null;
-        }
+    // Web Speech API를 사용한 음성 메시지 - 맥북 크롬 최적화
+    if ('speechSynthesis' in window) {
+      console.log('🎙️ Web Speech API 사용 가능');
+      
+      // 즉시 음성 재생 시도
+      const voices = window.speechSynthesis.getVoices();
+      console.log('🎙️ 사용 가능한 음성:', voices.length, '개');
+      
+      const utterance = new SpeechSynthesisUtterance(message);
+      utterance.lang = 'ko-KR';
+      utterance.rate = 0.9;
+      utterance.pitch = 0.8;
+      utterance.volume = 1.0;
+      
+      // 현재 utterance 참조 저장
+      currentUtteranceRef.current = utterance;
+      
+      // 한국어 음성 선택 (맥북에서 유나 우선)
+      const koreaVoice = voices.find(voice => 
+        voice.name.includes('유나') || 
+        voice.name.includes('Yuna') ||
+        voice.lang.includes('ko')
+      );
+      
+      if (koreaVoice) {
+        utterance.voice = koreaVoice;
+        console.log('🇰🇷 한국어 음성 선택:', koreaVoice.name);
+      } else {
+        console.log('⚠️ 한국어 음성 없음, 기본 음성 사용');
+      }
+
+      utterance.onstart = () => {
+        console.log('✅ 음성 재생 시작:', message.substring(0, 20) + '...');
+        setIsSpeechPlaying(true);
       };
       
-      // iOS에서 음성 로드 대기
-      speechTimeoutRef.current = setTimeout(() => {
-        const voices = window.speechSynthesis.getVoices();
-        if (voices.length > 0) {
-          waitForVoices();
+      utterance.onerror = (event) => {
+        console.error(`❌ 음성 오류 (${event.error}):`, message.substring(0, 30) + '...');
+        setIsSpeechPlaying(false);
+        currentUtteranceRef.current = null;
+        
+        if (event.error === 'not-allowed') {
+          console.error('❌ 음성 재생 권한 없음 - 다시 터치해주세요');
+          setIsSpeechEnabled(false);
+        } else if (event.error === 'canceled') {
+          console.warn('⚠️ 음성 재생 중단됨 (정상적인 중단)');
         } else {
-          // 음성이 아직 로드되지 않았다면 이벤트 대기
-          window.speechSynthesis.onvoiceschanged = () => {
-            console.log('🎙️ 음성 로드 완료');
-            waitForVoices();
-            window.speechSynthesis.onvoiceschanged = null;
+          console.error('❓ 알 수 없는 음성 오류:', event.error);
+        }
+      };
+
+      utterance.onend = () => {
+        console.log('✅ 음성 재생 완료');
+        setIsSpeechPlaying(false);
+        currentUtteranceRef.current = null;
+        speechTimeoutRef.current = null;
+      };
+      
+      // 맥북 크롬에서 안전한 재생
+      try {
+        console.log('🎵 음성 재생 시작 시도:', message.substring(0, 20) + '...');
+        
+        // 실제 음성 재생 함수
+        const actuallyPlaySpeech = () => {
+          window.speechSynthesis.speak(utterance);
+          
+          // 재생 확인을 더 자주 체크
+          let checkCount = 0;
+          const checkInterval = setInterval(() => {
+            checkCount++;
+            console.log(`🔍 음성 재생 상태 체크 #${checkCount}:`, {
+              speaking: window.speechSynthesis.speaking,
+              pending: window.speechSynthesis.pending,
+              paused: window.speechSynthesis.paused
+            });
+            
+            if (window.speechSynthesis.speaking) {
+              console.log('✅ 음성 재생 확인됨 - 모니터링 중단');
+              clearInterval(checkInterval);
+            } else if (checkCount >= 5) {
+              console.log('❌ 음성 재생 실패 - 재시도');
+              window.speechSynthesis.speak(utterance);
+              clearInterval(checkInterval);
+            }
+          }, 200);
+        };
+        
+        // 이전 음성이 있다면 완전히 정리하고 충분히 기다림
+        if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+          console.log('🔄 이전 음성 중단 중...');
+          window.speechSynthesis.cancel();
+          
+          // 이전 음성 완전 중단 확인 후 재생
+          const waitForComplete = () => {
+            setTimeout(() => {
+              if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+                console.log('⏳ 아직 이전 음성이 중단되지 않음 - 재확인...');
+                window.speechSynthesis.cancel();
+                waitForComplete(); // 재귀적으로 다시 확인
+              } else {
+                console.log('✅ 이전 음성 완전 중단 확인 - 새 음성 재생 시작');
+                actuallyPlaySpeech();
+              }
+            }, 200);
           };
           
-          // 백업: 2초 후 강제 실행
-          setTimeout(() => {
-            console.log('⏰ 음성 로드 타임아웃 - 강제 실행');
-            waitForVoices();
-          }, 2000);
+          waitForComplete();
+        } else {
+          console.log('🎵 이전 음성 없음 - 직접 재생');
+          actuallyPlaySpeech();
         }
-      }, 100); // iOS에서 중단 완료 대기
-      
-    } else {
-      if (!isSpeechEnabled) {
-        console.warn('⚠️ 음성이 활성화되지 않음 - 화면을 터치해주세요');
-      } else {
-        console.warn('⚠️ Web Speech API가 지원되지 않습니다.');
+        
+      } catch (error) {
+        console.error('❌ 음성 재생 실패:', error);
+        setIsSpeechPlaying(false);
+        currentUtteranceRef.current = null;
       }
+    } else {
+      console.error('❌ Web Speech API가 지원되지 않습니다.');
       setIsSpeechPlaying(false);
     }
   }, [isSpeechEnabled, isSpeechPlaying, stopSpeech]);
+
+  // 락 타이머 관리
+  useEffect(() => {
+    if (gateStatus === 'locked' && lockTimer > 0) {
+      const timer = setTimeout(() => {
+        setLockTimer(prev => {
+          const newTimer = prev - 1;
+          if (newTimer <= 0) {
+            console.log('🔓 락 해제 - 분석 모드로 복귀');
+            setGateStatus('analyzing');
+            return 0;
+          }
+          return newTimer;
+        });
+      }, 1000);
+
+      return () => clearTimeout(timer);
+    }
+  }, [gateStatus, lockTimer]);
 
   // 감정 개찰구 로직
   const processEmotionGate = useCallback((score: number) => {
     const NEGATIVE_THRESHOLD = -10; // 부정적 감정 임계값
     const POSITIVE_THRESHOLD = 20;  // 긍정적 감정 임계값
+    
+    // 음성 재생 중이면 아예 처리하지 않음 (최고 우선순위)
+    if (isSpeechPlaying) {
+      console.log(`🔇 음성 재생 중 - 모든 감정 처리 차단 (${score.toFixed(1)}%)`);
+      return;
+    }
+    
+    // 감정 처리 중이면 스킵 (디바운싱)
+    if (isProcessingEmotionRef.current) {
+      console.log(`⏳ 감정 처리 중 - 스킵 (${score.toFixed(1)}%)`);
+      return;
+    }
+    
+    // 감정 변화 시간 체크
+    const now = Date.now();
+    const timeSinceLastChange = now - lastEmotionChangeRef.current;
+    
+    // 일반적인 디바운싱 (2초)
+    const debounceTime = 2000;
+    
+    if (timeSinceLastChange < debounceTime) {
+      console.log(`⏳ 감정 변화 디바운싱 (${timeSinceLastChange}ms < ${debounceTime}ms)`);
+      return;
+    }
+    
+    // 처리 중 플래그 설정
+    isProcessingEmotionRef.current = true;
+    lastEmotionChangeRef.current = now;
+    
+    console.log(`🎭 감정 처리 시작: ${score.toFixed(1)}% (상태: ${gateStatus})`);
     
     if (score <= NEGATIVE_THRESHOLD) {
       if (gateStatus !== 'denied' && gateStatus !== 'locked') {
@@ -408,7 +592,7 @@ export default function Home() {
         // 3초 후 락 상태로 전환
         lockTimeoutRef.current = setTimeout(() => {
           // 2단계 더 극한 경고 메시지 먼저 재생
-          playDeniedMessage('시스템 오류가 발생했습니다. 감정 불안정이 감지되어 출입이 일시적으로 제한됩니다.');
+          playDeniedMessage('시스템 오류가 발생했습니다. 감정 불안정이 감지되어 미러 사용이 일시적으로 제한됩니다.');
           
           // 음성과 동시에 락 상태와 타이머 설정 (동시 업데이트)
           setGateStatus('locked');
@@ -430,9 +614,9 @@ export default function Home() {
         setGateStatus('approved');
         setLockTimer(0);
         
-        // 출입 허가 음성 메시지
+        // 승인 음성 메시지
         if ('speechSynthesis' in window && isSpeechEnabled) {
-          const approvalUtterance = new SpeechSynthesisUtterance('감정 상태가 적절합니다. 시민 출입을 허가합니다. 건전한 하루 되세요.');
+          const approvalUtterance = new SpeechSynthesisUtterance('완벽한 미소입니다! 아름다운 하루 되세요.');
           approvalUtterance.lang = 'ko-KR';
           approvalUtterance.rate = 0.9;
           approvalUtterance.pitch = 1.0;
@@ -441,9 +625,8 @@ export default function Home() {
       }
     } else {
       if (gateStatus === 'approved' || gateStatus === 'denied' || gateStatus === 'locked') {
-        // 중립 상태로 변경 시에도 음성 중단
-        console.log(`⚠️ 중립 상태 감지 (${score.toFixed(1)}%) - 음성 중단`);
-        stopSpeech('중립 상태');
+        // 중립 상태로 변경 시 - 조건부 처리
+        console.log(`⚠️ 중립 상태 감지 (${score.toFixed(1)}%) - 분석 모드로 전환`);
         
         // 진행 중인 락 타이머 취소
         if (lockTimeoutRef.current) {
@@ -455,71 +638,78 @@ export default function Home() {
         setLockTimer(0);
       }
     }
-  }, [gateStatus, playDeniedMessage, stopSpeech, isSpeechEnabled]);
-
-  // 정리 함수
-  const cleanup = useCallback(() => {
-    stopDetectionInterval();
-    cleanupVideo();
-    cleanupDeepAR();
     
-    // 강화된 음성 중단
-    stopSpeech('컴포넌트 정리');
-    
-    // 락 타이머 정리
-    if (lockTimeoutRef.current) {
-      clearTimeout(lockTimeoutRef.current);
-      lockTimeoutRef.current = null;
-    }
-  }, [stopDetectionInterval, cleanupVideo, cleanupDeepAR, stopSpeech]);
-
-  // Effects
-  useEffect(() => {
-    console.log('컴포넌트 마운트됨');
-    updateDimensions();
-    loadModels();
-    
-    // 시민ID 생성 (클라이언트에서만)
-    setCitizenId(Date.now().toString().slice(-6));
-    
-    // 간단한 지연 후 비디오 시작
+    // 처리 완료 후 플래그 해제 (1.5초 후)
     setTimeout(() => {
-      console.log('지연 후 비디오 시작 시도');
-      startVideo();
-    }, 1000);
+      isProcessingEmotionRef.current = false;
+      console.log(`✅ 감정 처리 완료: ${score.toFixed(1)}%`);
+    }, 1500);
     
-    window.addEventListener('resize', updateDimensions);
-    
-    return () => {
-      window.removeEventListener('resize', updateDimensions);
-      cleanup();
-    };
-  }, []);
+  }, [gateStatus, playDeniedMessage, stopSpeech, isSpeechEnabled, isSpeechPlaying]);
 
+  // 감정 스코어 변화에 따른 개찰구 처리 - processEmotionGate 정의 후 실행
   useEffect(() => {
-    if (isModelLoaded && isCameraReady && !isScreenshotQRVisible) {
-      console.log('🔍 감정 감지 시작');
-      startDetectionInterval();
-    } else {
-      if (isScreenshotQRVisible) {
-        console.log('📸 스크린샷 모달 열림 - 감정 감지 중지');
-      }
-      stopDetectionInterval();
-    }
-    
-    return stopDetectionInterval;
-  }, [isModelLoaded, isCameraReady, isScreenshotQRVisible, startDetectionInterval, stopDetectionInterval]);
-
-  useEffect(() => {
-    updateDeepARCanvasSize();
-  }, [updateDeepARCanvasSize]);
-
-  // 감정 스코어 변화에 따른 개찰구 처리
-  useEffect(() => {
-    if (emotionScore !== null && isModelLoaded && isCameraReady && !isScreenshotQRVisible) {
+    if (emotionScore !== null && isModelLoaded && isCameraReady) {
       processEmotionGate(emotionScore);
     }
-  }, [emotionScore, isModelLoaded, isCameraReady, isScreenshotQRVisible, processEmotionGate]);
+  }, [emotionScore, isModelLoaded, isCameraReady, processEmotionGate]);
+
+  // iOS 음성 디버깅용 useEffect
+  useEffect(() => {
+    if ('speechSynthesis' in window) {
+      // 음성 목록 로드 모니터링
+      const logVoices = () => {
+        const voices = window.speechSynthesis.getVoices();
+        console.log('🎙️ 음성 목록 업데이트:', {
+          count: voices.length,
+          korean: voices.filter(v => v.lang.includes('ko')).length,
+          default: voices.filter(v => v.default).length,
+          local: voices.filter(v => v.localService).length
+        });
+        
+        if (voices.length > 0) {
+          const koreanVoices = voices.filter(v => v.lang.includes('ko'));
+          if (koreanVoices.length > 0) {
+            console.log('🇰🇷 한국어 음성 발견:', koreanVoices.map(v => `${v.name} (${v.lang})`));
+          }
+        }
+      };
+      
+      // 초기 음성 체크
+      logVoices();
+      
+      // 음성 변경 이벤트 모니터링
+      window.speechSynthesis.onvoiceschanged = logVoices;
+      
+      return () => {
+        window.speechSynthesis.onvoiceschanged = null;
+      };
+    }
+  }, []);
+
+  // 페이지 언마운트 시 정리
+  useEffect(() => {
+    return () => {
+      // 모든 타이머 정리
+      if (lockTimeoutRef.current) {
+        clearTimeout(lockTimeoutRef.current);
+      }
+      if (speechTimeoutRef.current) {
+        clearTimeout(speechTimeoutRef.current);
+      }
+      if (emotionProcessingRef.current) {
+        clearTimeout(emotionProcessingRef.current);
+      }
+      
+      // 음성 중단
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      
+      // 플래그 초기화
+      isProcessingEmotionRef.current = false;
+    };
+  }, []);
 
   // DeepAR 로드 시 초기 설정
   useEffect(() => {
@@ -536,11 +726,7 @@ export default function Home() {
 
   // 감정 개찰구 시스템에 따른 자동 효과 적용
   useEffect(() => {
-    if (!isDeepARLoaded || !emotionScore || isScreenshotQRVisible) {
-      // 모달이 열렸을 때는 효과 적용 중지
-      if (isScreenshotQRVisible) {
-        console.log('📸 스크린샷 모달 열림 - 효과 적용 중지');
-      }
+    if (!isDeepARLoaded || !emotionScore) {
       return;
     }
     
@@ -549,31 +735,6 @@ export default function Home() {
       console.warn(`비정상적인 감정 점수: ${emotionScore}, 무시됨`);
       return;
     }
-
-    // 100점 달성 감지 로직
-    if (emotionScore >= 100 && lastScoreRef.current < 100 && !hasReached100) {
-      console.log('🎉 100점 달성! 스크린샷 QR 모달 표시');
-      setHasReached100(true);
-      setIsScreenshotQRVisible(true);
-      
-      // 축하 효과나 소리 등 추가 가능
-      if ('speechSynthesis' in window && isSpeechEnabled) {
-        const congratsUtterance = new SpeechSynthesisUtterance('완벽한 미소입니다! 스크린샷이 촬영되었습니다!');
-        congratsUtterance.lang = 'ko-KR';
-        congratsUtterance.rate = 0.9;
-        congratsUtterance.pitch = 1.2;
-        window.speechSynthesis.speak(congratsUtterance);
-      }
-    }
-    
-    // 점수가 90 아래로 떨어지면 100점 달성 상태 리셋 (재도전 허용)
-    if (emotionScore < 90 && hasReached100) {
-      setHasReached100(false);
-      console.log('📊 점수 하락으로 100점 달성 상태 리셋');
-    }
-    
-    // 이전 점수 저장
-    lastScoreRef.current = emotionScore;
     
     // 안정적인 디바운싱을 위한 타이머
     const debounceTimer = setTimeout(() => {
@@ -608,52 +769,30 @@ export default function Home() {
     }, 200); // 200ms 디바운싱으로 반응성 향상
     
     return () => clearTimeout(debounceTimer);
-  }, [emotionScore, isDeepARLoaded, activeEffect, applyEffect, hasReached100, isSpeechEnabled, isScreenshotQRVisible]);
+  }, [emotionScore, isDeepARLoaded, activeEffect, applyEffect, isSpeechEnabled]);
 
-  // 락 타이머 카운트다운
-  useEffect(() => {
-    if (lockTimer > 0) {
-      const timer = setTimeout(() => {
-        setLockTimer(prev => prev - 1);
-      }, 1000);
-      return () => clearTimeout(timer);
-    } else if (lockTimer === 0 && gateStatus === 'locked') {
-      setGateStatus('analyzing');
-    }
-  }, [lockTimer, gateStatus]);
-
-  // iOS 음성 디버깅용 useEffect
-  useEffect(() => {
-    if ('speechSynthesis' in window) {
-      // 음성 목록 로드 모니터링
-      const logVoices = () => {
-        const voices = window.speechSynthesis.getVoices();
-        console.log('🎙️ 음성 목록 업데이트:', {
-          count: voices.length,
-          korean: voices.filter(v => v.lang.includes('ko')).length,
-          default: voices.filter(v => v.default).length,
-          local: voices.filter(v => v.localService).length
-        });
-        
-        if (voices.length > 0) {
-          const koreanVoices = voices.filter(v => v.lang.includes('ko'));
-          if (koreanVoices.length > 0) {
-            console.log('🇰🇷 한국어 음성 발견:', koreanVoices.map(v => `${v.name} (${v.lang})`));
-          }
-        }
-      };
-      
-      // 초기 음성 체크
-      logVoices();
-      
-      // 음성 변경 이벤트 모니터링
-      window.speechSynthesis.onvoiceschanged = logVoices;
-      
-      return () => {
-        window.speechSynthesis.onvoiceschanged = null;
+  // 캔버스 치수 계산
+  const canvasDimensions: CanvasDimensions = useMemo(() => {
+    if (!dimensions.width || !dimensions.height) {
+      return {
+        width: 640,
+        height: 480,
+        displayWidth: 640,
+        displayHeight: 480,
+        aspectRatio: 4/3
       };
     }
-  }, []);
+
+    const aspectRatio = dimensions.width / dimensions.height;
+    
+    return {
+      width: dimensions.width,
+      height: dimensions.height,
+      displayWidth: dimensions.width,
+      displayHeight: dimensions.height,
+      aspectRatio
+    };
+  }, [dimensions]);
 
   // 게이트 상태에 따른 스타일 결정
   const getGateStyles = () => {
@@ -695,8 +834,8 @@ export default function Home() {
       onClick={enableSpeechOnTouch}
     >
       <Head>
-        <title>감정 조응 도시 - The Compliance of Happiness</title>
-        <meta name="description" content="감정 인식 기반 출입 통제 시스템. 모든 시민의 행복을 위한 과학적 감정 관리." />
+        <title>스마일 미러 - Smile Mirror</title>
+        <meta name="description" content="당신의 완벽한 미소를 위한 AR 뷰티 미러 앱" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
 
@@ -705,17 +844,17 @@ export default function Home() {
         {/* 상단 헤더 */}
         <div className="absolute top-0 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-8 py-3 rounded-b-lg border-2 border-gray-700 shadow-lg">
           <div className="text-center">
-            <h1 className="text-xl font-bold mb-1">🚇 감정 조응 도시</h1>
+            <h1 className="text-xl font-bold mb-1">✨ 스마일 미러</h1>
             <div className={`text-sm font-medium ${
               gateStatus === 'analyzing' ? 'text-blue-300' :
               gateStatus === 'approved' ? 'text-green-300' :
               gateStatus === 'denied' ? 'text-yellow-300' :
               'text-red-300'
             }`}>
-              {gateStatus === 'analyzing' && '📊 감정 스캔 중...'}
-              {gateStatus === 'approved' && '✅ 시민 출입 허가됨'}
-              {gateStatus === 'denied' && '⚠️ 감정 부적절 - 출입 거부'}
-              {gateStatus === 'locked' && `🔒 출입 일시 제한 (${lockTimer}초)`}
+              {gateStatus === 'analyzing' && '📊 표정 분석 중...'}
+              {gateStatus === 'approved' && '😊 완벽한 미소!'}
+              {gateStatus === 'denied' && '😔 더 밝게 웃어보세요!'}
+              {gateStatus === 'locked' && `⏳ 잠시 기다려주세요 (${lockTimer}초)`}
             </div>
           </div>
         </div>
@@ -849,7 +988,7 @@ export default function Home() {
                 <p className="text-lg font-semibold">{deniedMessage}</p>
               </div>
               <div className="text-xs mt-2 opacity-90">
-                시민 행복 지수 향상을 위해 협조해주세요
+                더 밝게 웃어주세요!
               </div>
             </div>
           </div>
@@ -859,7 +998,7 @@ export default function Home() {
         <div className="fixed bottom-4 left-4 z-40 bg-black bg-opacity-70 text-white px-4 py-2 rounded-lg text-sm">
           <div>감정 점수: {emotionScore?.toFixed(1) || '스캔중'}</div>
           <div>시스템: {isModelLoaded && isCameraReady ? '온라인' : '오프라인'}</div>
-          <div className="text-xs text-blue-300">시민ID: {citizenId}</div>
+          <div className="text-xs text-blue-300">유저ID: {citizenId}</div>
         </div>
         
         <LoadingMessages
@@ -868,15 +1007,6 @@ export default function Home() {
           isDeepARLoaded={isDeepARLoaded}
         />
       </main>
-
-      {/* 100점 달성 시 스크린샷 QR 모달 */}
-      <ScreenshotQR
-        isVisible={isScreenshotQRVisible}
-        videoRef={videoRef}
-        deepARCanvasRef={deepARCanvasRef}
-        takeDeepARScreenshot={takeDeepARScreenshot}
-        onClose={() => setIsScreenshotQRVisible(false)}
-      />
     </div>
   );
 } 
