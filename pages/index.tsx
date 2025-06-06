@@ -574,6 +574,12 @@ export default function Home() {
     const isPositive = score >= POSITIVE_THRESHOLD;
     const debounceTime = isPositive ? 1000 : 2000; // 긍정적 감정은 1초, 그외는 2초
     
+    // 팝업이 표시되는 동안 모든 감정 처리 차단
+    if (showAccessModal) {
+      console.log(`🎉 출입허가 팝업 표시 중 - 모든 감정 처리 차단 (${score.toFixed(1)}%)`);
+      return;
+    }
+
     // 음성 재생 중일 때는 긍정적 감정만 처리 (팝업 표시 허용)
     if (isSpeechPlaying && !isPositive) {
       console.log(`🔇 음성 재생 중 - 부정적 감정 처리만 차단 (${score.toFixed(1)}%)`);
@@ -667,7 +673,7 @@ export default function Home() {
         }
         accessModalTimeoutRef.current = setTimeout(() => {
           setShowAccessModal(false);
-        }, 6500); // 5초 유지 + 0.5초 닫기 애니메이션 + 1초 여유
+        }, 10500); // 10초 유지 + 0.5초 닫기 애니메이션
         
         // 승인 음성 메시지
         if ('speechSynthesis' in window && isSpeechEnabled) {

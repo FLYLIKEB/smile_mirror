@@ -31,11 +31,11 @@ const FutureAccessModal: React.FC<FutureAccessModalProps> = ({
               clearInterval(interval);
               setAnimationStep('approved');
               
-              // 5초 후 자동 닫기
+              // 10초 후 자동 닫기
               setTimeout(() => {
                 setAnimationStep('exiting');
                 setTimeout(onClose, 500);
-              }, 5000);
+              }, 10000);
               
               return 100;
             }
