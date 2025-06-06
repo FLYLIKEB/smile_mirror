@@ -4,6 +4,7 @@ import Score from '../components/Score';
 import AREffectButtons from '../components/AREffectButtons';
 import LoadingMessages from '../components/LoadingMessages';
 import EmotionGateOverlay from '../components/EmotionGateOverlay';
+import FutureAccessModal from '../components/FutureAccessModal';
 import { useDeepAR } from '../hooks/useDeepAR';
 import { useFaceAPI } from '../hooks/useFaceAPI';
 import { useVideo } from '../hooks/useVideo';
@@ -56,6 +57,11 @@ export default function Home() {
 
   // 시민ID 상태 관리 (hydration 오류 방지)
   const [citizenId, setCitizenId] = useState<string>('------');
+
+  // 미래형 출입 허용 팝업 상태 관리
+  const [showAccessModal, setShowAccessModal] = useState<boolean>(false);
+  const [lastApprovalTime, setLastApprovalTime] = useState<number>(0);
+  const accessModalTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // 화면 크기 관리
   const { dimensions, updateDimensions } = useDimensions(containerRef);
@@ -121,6 +127,12 @@ export default function Home() {
     if (lockTimeoutRef.current) {
       clearTimeout(lockTimeoutRef.current);
       lockTimeoutRef.current = null;
+    }
+    
+    // 팝업 타이머 정리
+    if (accessModalTimeoutRef.current) {
+      clearTimeout(accessModalTimeoutRef.current);
+      accessModalTimeoutRef.current = null;
     }
   }, [stopDetectionInterval, cleanupVideo, cleanupDeepAR]);
 
@@ -552,26 +564,27 @@ export default function Home() {
   // 감정 개찰구 로직
   const processEmotionGate = useCallback((score: number) => {
     const NEGATIVE_THRESHOLD = -10; // 부정적 감정 임계값
-    const POSITIVE_THRESHOLD = 20;  // 긍정적 감정 임계값
-    
-    // 음성 재생 중이면 아예 처리하지 않음 (최고 우선순위)
-    if (isSpeechPlaying) {
-      console.log(`🔇 음성 재생 중 - 모든 감정 처리 차단 (${score.toFixed(1)}%)`);
-      return;
-    }
-    
-    // 감정 처리 중이면 스킵 (디바운싱)
-    if (isProcessingEmotionRef.current) {
-      console.log(`⏳ 감정 처리 중 - 스킵 (${score.toFixed(1)}%)`);
-      return;
-    }
+    const POSITIVE_THRESHOLD = 12;  // 긍정적 감정 임계값 (15 → 12로 더 낮춤)
     
     // 감정 변화 시간 체크
     const now = Date.now();
     const timeSinceLastChange = now - lastEmotionChangeRef.current;
     
-    // 일반적인 디바운싱 (2초)
-    const debounceTime = 2000;
+    // 긍정적 감정의 경우 디바운싱 시간을 짧게 (1초)
+    const isPositive = score >= POSITIVE_THRESHOLD;
+    const debounceTime = isPositive ? 1000 : 2000; // 긍정적 감정은 1초, 그외는 2초
+    
+    // 음성 재생 중일 때는 긍정적 감정만 처리 (팝업 표시 허용)
+    if (isSpeechPlaying && !isPositive) {
+      console.log(`🔇 음성 재생 중 - 부정적 감정 처리만 차단 (${score.toFixed(1)}%)`);
+      return;
+    }
+    
+    // 감정 처리 중이면 스킵 (디바운싱) - 단, 긍정적 감정은 예외
+    if (isProcessingEmotionRef.current && !isPositive) {
+      console.log(`⏳ 감정 처리 중 - 부정적 감정만 스킵 (${score.toFixed(1)}%)`);
+      return;
+    }
     
     if (timeSinceLastChange < debounceTime) {
       console.log(`⏳ 감정 변화 디바운싱 (${timeSinceLastChange}ms < ${debounceTime}ms)`);
@@ -586,11 +599,21 @@ export default function Home() {
     
     if (score <= NEGATIVE_THRESHOLD) {
       if (gateStatus !== 'denied' && gateStatus !== 'locked') {
+        console.log(`🚫 부정적 감정 감지 (${score.toFixed(1)}%) - denied 상태로 전환`);
+        
+        // 기존 타이머들 정리
+        if (lockTimeoutRef.current) {
+          clearTimeout(lockTimeoutRef.current);
+          lockTimeoutRef.current = null;
+        }
+        
         setGateStatus('denied');
         playDeniedMessage('감정이 불안정하신 것 같아요. 웃어주세요!');
         
         // 3초 후 락 상태로 전환
         lockTimeoutRef.current = setTimeout(() => {
+          console.log(`⏰ 3초 경과 - 락 상태로 전환 (현재 상태: ${gateStatus})`);
+          
           // 2단계 더 극한 경고 메시지 먼저 재생
           playDeniedMessage('시스템 오류가 발생했습니다. 감정 불안정이 감지되어 미러 사용이 일시적으로 제한됩니다.');
           
@@ -600,19 +623,51 @@ export default function Home() {
         }, 3000);
       }
     } else if (score >= POSITIVE_THRESHOLD) {
+      console.log(`🚀 긍정적 감정 감지 (${score.toFixed(1)}%) - 승인 처리 시작`);
+      
       if (gateStatus !== 'approved') {
         // 감정이 개선되면 즉시 음성 중단 (denied/locked 상태에서)
         console.log(`✅ 감정 개선 감지 (${score.toFixed(1)}%) - 음성 즉시 중단`);
         stopSpeech('감정 개선됨');
         
-        // 진행 중인 락 타이머 취소
+        // 진행 중인 락 타이머 강제 취소 (여러 번 확인)
         if (lockTimeoutRef.current) {
+          console.log('🔄 기존 락 타이머 취소 중...');
           clearTimeout(lockTimeoutRef.current);
           lockTimeoutRef.current = null;
         }
         
+        // 혹시 모를 추가 타이머들도 정리
+        if (speechTimeoutRef.current) {
+          clearTimeout(speechTimeoutRef.current);
+          speechTimeoutRef.current = null;
+        }
+        
+        // 상태 즉시 업데이트
         setGateStatus('approved');
         setLockTimer(0);
+        setDeniedMessage(''); // 기존 메시지도 즉시 제거
+        
+        console.log(`🎉 감정 승인 완료: ${score.toFixed(1)}% - 모든 타이머 정리됨`);
+      }
+      
+      // 팝업 표시 로직 (approved 상태와 무관하게 체크)
+      const popupNow = Date.now();
+      const timeSinceLastPopup = popupNow - lastApprovalTime;
+      console.log(`🎭 팝업 표시 체크: 마지막 팝업으로부터 ${timeSinceLastPopup}ms 경과 (5초 = 5000ms)`);
+      
+      if (timeSinceLastPopup > 5000) { // 2초 → 5초로 증가
+        console.log(`🎉 팝업 표시 조건 만족 - 미래형 출입 허용 팝업 표시!`);
+        setLastApprovalTime(popupNow);
+        setShowAccessModal(true);
+        
+        // 팝업이 자동으로 닫힐 때까지 기다린 후 정리
+        if (accessModalTimeoutRef.current) {
+          clearTimeout(accessModalTimeoutRef.current);
+        }
+        accessModalTimeoutRef.current = setTimeout(() => {
+          setShowAccessModal(false);
+        }, 6500); // 5초 유지 + 0.5초 닫기 애니메이션 + 1초 여유
         
         // 승인 음성 메시지
         if ('speechSynthesis' in window && isSpeechEnabled) {
@@ -622,6 +677,8 @@ export default function Home() {
           approvalUtterance.pitch = 1.0;
           window.speechSynthesis.speak(approvalUtterance);
         }
+      } else {
+        console.log(`⏰ 팝업 대기 중 - 아직 ${5000 - timeSinceLastPopup}ms 남음`);
       }
     } else {
       if (gateStatus === 'approved' || gateStatus === 'denied' || gateStatus === 'locked') {
@@ -630,20 +687,26 @@ export default function Home() {
         
         // 진행 중인 락 타이머 취소
         if (lockTimeoutRef.current) {
+          console.log('🔄 중립 상태 - 락 타이머 취소');
           clearTimeout(lockTimeoutRef.current);
           lockTimeoutRef.current = null;
         }
         
+        // 음성 중단
+        stopSpeech('중립 상태');
+        
         setGateStatus('analyzing');
         setLockTimer(0);
+        setDeniedMessage(''); // 기존 메시지 제거
       }
     }
     
-    // 처리 완료 후 플래그 해제 (1.5초 후)
+    // 처리 완료 후 플래그 해제 (긍정적 감정은 0.5초, 그외는 1초)
+    const processingDelay = isPositive ? 500 : 1000;
     setTimeout(() => {
       isProcessingEmotionRef.current = false;
-      console.log(`✅ 감정 처리 완료: ${score.toFixed(1)}%`);
-    }, 1500);
+      console.log(`✅ 감정 처리 완료: ${score.toFixed(1)}% (${processingDelay}ms 후)`);
+    }, processingDelay);
     
   }, [gateStatus, playDeniedMessage, stopSpeech, isSpeechEnabled, isSpeechPlaying]);
 
@@ -699,6 +762,9 @@ export default function Home() {
       }
       if (emotionProcessingRef.current) {
         clearTimeout(emotionProcessingRef.current);
+      }
+      if (accessModalTimeoutRef.current) {
+        clearTimeout(accessModalTimeoutRef.current);
       }
       
       // 음성 중단
@@ -1007,6 +1073,14 @@ export default function Home() {
           isDeepARLoaded={isDeepARLoaded}
         />
       </main>
+
+      {/* 미래형 출입 허용 팝업 */}
+      <FutureAccessModal
+        isVisible={showAccessModal}
+        onClose={() => setShowAccessModal(false)}
+        emotionScore={emotionScore || 0}
+        citizenId={citizenId}
+      />
     </div>
   );
 } 
