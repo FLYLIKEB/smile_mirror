@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 
 interface FutureAccessModalProps {
   isVisible: boolean;
@@ -15,13 +15,30 @@ const FutureAccessModal: React.FC<FutureAccessModalProps> = ({
 }) => {
   const [animationStep, setAnimationStep] = useState<'entering' | 'processing' | 'approved' | 'exiting'>('entering');
   const [scanProgress, setScanProgress] = useState(0);
+  const [hasStarted, setHasStarted] = useState(false);
+  const [countdown, setCountdown] = useState(10);
+  const timersRef = useRef<NodeJS.Timeout[]>([]);
+  const onCloseRef = useRef(onClose);
+  
+  // onClose 참조 업데이트
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
-    if (isVisible) {
+    if (isVisible && !hasStarted) {
+      console.log('🎉 팝업 시작 - 애니메이션 및 타이머 초기화');
+      setHasStarted(true);
       setAnimationStep('entering');
+      setScanProgress(0);
+      
+      // 모든 타이머들을 정리하고 새로 시작
+      timersRef.current.forEach(timer => clearTimeout(timer));
+      timersRef.current = [];
       
       // 스캔 애니메이션
-      setTimeout(() => {
+      const enteringTimeout = setTimeout(() => {
+        console.log('🔍 스캔 처리 단계 시작');
         setAnimationStep('processing');
         
         // 스캔 진행률 애니메이션
@@ -29,24 +46,58 @@ const FutureAccessModal: React.FC<FutureAccessModalProps> = ({
           setScanProgress(prev => {
             if (prev >= 100) {
               clearInterval(interval);
+                            console.log('✅ 스캔 완료 - 승인 단계로 전환');
               setAnimationStep('approved');
+              setCountdown(10);
               
-              // 10초 후 자동 닫기
-              setTimeout(() => {
-                setAnimationStep('exiting');
-                setTimeout(onClose, 500);
-              }, 10000);
+              // 1초마다 카운트다운 업데이트
+              const countdownInterval = setInterval(() => {
+                setCountdown(prev => {
+                  if (prev <= 1) {
+                    clearInterval(countdownInterval);
+                    console.log('⏰ 카운트다운 완료 - 팝업 닫기 시작');
+                    setAnimationStep('exiting');
+                    setTimeout(() => {
+                      console.log('🎭 팝업 완전히 닫힘');
+                      onCloseRef.current();
+                    }, 500);
+                    return 0;
+                  }
+                  return prev - 1;
+                });
+              }, 1000);
               
+              timersRef.current.push(countdownInterval as any);
               return 100;
             }
             return prev + 4;
           });
         }, 30);
+        
+        timersRef.current.push(interval as any);
       }, 500);
-    } else {
+      
+      timersRef.current.push(enteringTimeout);
+    } else if (!isVisible) {
+      // 팝업이 닫히면 모든 상태 초기화
+      console.log('🎭 팝업 닫힘 - 상태 초기화');
+      setHasStarted(false);
       setScanProgress(0);
+      setAnimationStep('entering');
+      setCountdown(10);
+      
+      // 모든 타이머 정리
+      timersRef.current.forEach(timer => clearTimeout(timer));
+      timersRef.current = [];
     }
-  }, [isVisible, onClose]);
+  }, [isVisible]);
+  
+  // 컴포넌트 언마운트 시 타이머 정리
+  useEffect(() => {
+    return () => {
+      timersRef.current.forEach(timer => clearTimeout(timer));
+    };
+  }, []);
 
   if (!isVisible) return null;
 
@@ -138,8 +189,29 @@ const FutureAccessModal: React.FC<FutureAccessModalProps> = ({
               <div className="bg-green-900/30 border border-green-400/50 rounded-lg p-4">
                 <div className="text-center">
                   <div className="text-green-400 text-lg font-bold mb-2">승인 완료</div>
-                  <div className="text-green-300 text-sm">
+                  <div className="text-green-300 text-sm mb-3">
                     감정 안정도: <span className="font-mono">{emotionScore.toFixed(1)}%</span>
+                  </div>
+                  
+                  {/* 카운트다운 표시 */}
+                  <div className="bg-blue-900/30 border border-blue-400/50 rounded-lg p-3 mt-3">
+                    <div className="text-center">
+                      <div className="text-blue-300 text-sm mb-1">자동 닫기</div>
+                      <div className="flex items-center justify-center space-x-2">
+                        <div className="w-8 h-8 bg-gradient-to-r from-blue-400 to-cyan-400 rounded-full flex items-center justify-center">
+                          <span className="text-white font-bold text-sm">{countdown}</span>
+                        </div>
+                        <span className="text-blue-300 text-sm">초 후 닫힘</span>
+                      </div>
+                      
+                      {/* 진행 바 */}
+                      <div className="w-full bg-gray-700 rounded-full h-1.5 mt-2">
+                        <div 
+                          className="bg-gradient-to-r from-blue-400 to-cyan-400 h-1.5 rounded-full transition-all duration-1000 shadow-lg shadow-blue-500/50"
+                          style={{ width: `${(countdown / 10) * 100}%` }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 </div>
               </div>

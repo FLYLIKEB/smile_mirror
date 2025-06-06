@@ -714,14 +714,20 @@ export default function Home() {
       console.log(`✅ 감정 처리 완료: ${score.toFixed(1)}% (${processingDelay}ms 후)`);
     }, processingDelay);
     
-  }, [gateStatus, playDeniedMessage, stopSpeech, isSpeechEnabled, isSpeechPlaying]);
+  }, [gateStatus, playDeniedMessage, stopSpeech, isSpeechEnabled, isSpeechPlaying, showAccessModal]);
 
   // 감정 스코어 변화에 따른 개찰구 처리 - processEmotionGate 정의 후 실행
   useEffect(() => {
+    // 팝업이 표시 중이면 모든 감정 처리 차단
+    if (showAccessModal) {
+      console.log('🎉 출입허가 팝업 표시 중 - useEffect에서 감정 처리 차단');
+      return;
+    }
+    
     if (emotionScore !== null && isModelLoaded && isCameraReady) {
       processEmotionGate(emotionScore);
     }
-  }, [emotionScore, isModelLoaded, isCameraReady, processEmotionGate]);
+  }, [emotionScore, isModelLoaded, isCameraReady, processEmotionGate, showAccessModal]);
 
   // iOS 음성 디버깅용 useEffect
   useEffect(() => {
